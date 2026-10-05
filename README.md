@@ -120,6 +120,9 @@ python scripts/transcribe.py "C:\videos\C0103.MP4" --out "C:\videos\edit\transcr
 | `--audio-track N` | auto (most channels) | which audio stream to use (OBS: 0 = game, 1 = mic) |
 | `--formats json,srt,txt[,vtt]` | `json,srt,txt` | artifacts to write |
 | `--lang pt` | — | forwarded to the runtime; **ignored by the v3 model** (language detection is built-in) |
+| `--tokens` | off | JSON also carries token-level timestamps/confidences (token text via the model vocab) |
+| `--review-threshold F` | `0.6` | confidence threshold for the review report |
+| `--retranscribe "START-END"` | — | fresh-context re-transcription of one span (agent repair) |
 | `--force` | — | ignore the cache |
 
 ## Configuration
@@ -184,6 +187,25 @@ each prefixed with one timestamp — for reading, notes and LLM consumption:
 ```
 
 When diarization is on, blocks are prefixed with `Speaker N:`.
+
+### Review report & repair (for agents)
+
+Every run writes `<stem>.review.txt`: the words below the confidence threshold with timestamps,
+plus agent guidance. Combined with a read-through of the text, this powers an agentic review
+loop:
+
+```bash
+# 1. transcribe (JSON + review report)
+python scripts/transcribe.py interview.mp4 --tokens
+
+# 2. read review.txt and the text; a drift artifact spotted ("reunion" for "reunião")?
+# 3. re-transcribe just that span with fresh decoder context and patch the final text
+python scripts/transcribe.py interview.mp4 --retranscribe "68.2-74.5"
+```
+
+`--retranscribe` writes `<stem>.rt_START-END.json/.txt` whose times are **absolute** (original
+file timeline). Keep the original timings; patch only the text. `--tokens` adds token-level
+timestamps/confidences (token text resolved from the model vocab) to the JSON.
 
 ## Language handling
 

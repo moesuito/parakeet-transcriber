@@ -227,6 +227,72 @@ def device_line(stderr: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------- vocab
+
+def _read_gguf_string_array(model_path: Path, key: str) -> list[str] | None:
+    """Minimal GGUF metadata reader for one string-array key."""
+    import struct
+    with open(model_path, "rb") as f:
+        def u32() -> int:
+            return struct.unpack("<I", f.read(4))[0]
+
+        def u64() -> int:
+            return struct.unpack("<Q", f.read(8))[0]
+
+        def s() -> str:
+            return f.read(u64()).decode("utf-8", "replace")
+
+        sizes = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+
+        def skip(kind: int) -> None:
+            if kind == 8:
+                f.read(u64())
+            elif kind == 9:
+                at, ac = u32(), u64()
+                for _ in range(ac):
+                    skip(at)
+            else:
+                f.read(sizes[kind])
+
+        if f.read(4) != b"GGUF":
+            return None
+        u32()  # version
+        u64()  # tensor count
+        nkv = u64()
+        for _ in range(nkv):
+            k, vt = s(), u32()
+            if k == key and vt == 9:
+                at, ac = u32(), u64()
+                if at == 8:
+                    return [s() for _ in range(ac)]
+                for _ in range(ac):
+                    skip(at)
+                return None
+            skip(vt)
+    return None
+
+
+def load_vocab(model_path: Path) -> list[str] | None:
+    """Tokenizer pieces straight from the model GGUF (cached next to it)."""
+    cache = Path(str(model_path) + ".vocab.json")
+    if cache.exists():
+        try:
+            return json.loads(cache.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    pieces = _read_gguf_string_array(model_path, "parakeet.tokenizer.pieces")
+    if pieces:
+        try:
+            cache.write_text(json.dumps(pieces, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return pieces
+
+
+def clean_piece(p: str) -> str:
+    return p.replace("\u2581", " ")
+
+
 # ---------------------------------------------------------------- engines
 
 def run_asr(cli: Path, model: Path, wav: Path, lang: str | None) -> tuple[dict, str, float]:
@@ -460,6 +526,89 @@ def write_txt(scribe: dict, path: Path, duration: float) -> None:
     path.write_text("\n\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_review(scribe: dict, path: Path, threshold: float) -> None:
+    """Review report for agents: low-confidence words + repair guidance."""
+    words = [w for w in scribe["words"] if w["type"] == "word"]
+    flagged = [w for w in words if w.get("confidence") is not None and w["confidence"] < threshold]
+    lines = [f"Transcription review (confidence threshold {threshold:.2f})", "",
+             f"words: {len(words)} | flagged below threshold: {len(flagged)}"]
+    if flagged:
+        lines.append("")
+        for w in flagged:
+            lines.append(f"  [{fmt_srt(w['start'])[:12]}] {w['text']!r}  conf {w['confidence']:.2f}")
+    lines += [
+        "",
+        "Agent guidance:",
+        "1. Also read the full text yourself: a long passage in another language can bias the",
+        "   decoder (drift), e.g. Portuguese words rendered as English near-homophones",
+        "   ('reuniao' -> 'reunion'). Confidence alone does not catch every drift case.",
+        "2. For a suspicious span, get a fresh-context transcription (decoder state reset):",
+        '     python transcribe.py <media> --retranscribe "START-END"',
+        "   and patch the final text with the fresh result, keeping the original timings.",
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _retranscribe(cfg: dict, home: Path, cli: Path, asr_model: Path, src: Path, args) -> int:
+    """Fresh-context transcription of one span (agent repair workflow)."""
+    spec = args.retranscribe
+    try:
+        a_s, b_s = spec.split("-", 1)
+        r_start, r_end = float(a_s), float(b_s)
+    except Exception:
+        raise SystemExit('--retranscribe expects "START-END" in seconds, e.g. "7.2-11.3"')
+    if r_end <= r_start:
+        raise SystemExit("--retranscribe: END must be greater than START")
+
+    audio, duration = ffprobe_streams(src)
+    track = pick_track(audio, args.audio_track)
+    out_dir = (args.out or (src.parent / "transcripts")).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pad = 0.4
+    s = max(0.0, r_start - pad)
+    e = min(duration, r_end + pad) if duration else r_end + pad
+
+    with tempfile.TemporaryDirectory(prefix="rt_") as tmp:
+        full = Path(tmp) / "full.wav"
+        extract_wav(src, full, track)
+        cut = Path(tmp) / "cut.wav"
+        p = run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-ss", f"{s:.3f}", "-i", str(full), "-t", f"{e - s:.3f}",
+                 "-c:a", "pcm_s16le", str(cut)])
+        if p.returncode != 0:
+            raise SystemExit(f"ffmpeg cut failed: {p.stderr.strip()[:300]}")
+        parsed, _stderr, dt = run_asr(cli, asr_model, cut, args.lang)
+
+    words = []
+    for w in parsed.get("words", []):
+        txt = (w.get("w") or "").strip()
+        if not txt:
+            continue
+        words.append({"text": txt, "start": round(float(w["start"]) + s, 3),
+                      "end": round(float(w["end"]) + s, 3), "confidence": w.get("conf")})
+    text = fix_text(" ".join(w["text"] for w in words))
+
+    base = src.stem + ("" if track == 0 else f".track{track}")
+    tag = f"{r_start:.2f}-{r_end:.2f}"
+    jp = out_dir / f"{base}.rt_{tag}.json"
+    tp = out_dir / f"{base}.rt_{tag}.txt"
+    jp.write_text(json.dumps({
+        "text": text,
+        "words": words,
+        "slice": {"requested_start": r_start, "requested_end": r_end,
+                  "padded_start": round(s, 3), "padded_end": round(e, 3), "pad_s": pad},
+        "note": "fresh-context transcription of one span; times are ABSOLUTE (original file)",
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    tp.write_text(text + "\n", encoding="utf-8")
+    if not args.quiet:
+        log(f"retranscribe [{tag}]  ({dt:.1f}s):")
+        log(f"  {text}")
+        log(f"  {jp}")
+    else:
+        log(text)
+    return 0
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> int:
@@ -472,6 +621,12 @@ def main() -> int:
                     help="model precision (default: f16)")
     ap.add_argument("--lang", default=None,
                     help="language hint forwarded to the runtime (ignored by the v3 model)")
+    ap.add_argument("--tokens", action="store_true",
+                    help="JSON also carries token-level timestamps+confidences (text via model vocab)")
+    ap.add_argument("--review-threshold", type=float, default=None,
+                    help="confidence threshold for the review report (default 0.6)")
+    ap.add_argument("--retranscribe", default=None, metavar="START-END",
+                    help='fresh-context re-transcription of one span (seconds), e.g. "7.2-11.3"')
     ap.add_argument("--diarize", default=None, choices=["auto", "on", "off"],
                     help="speaker diarization (default: auto = on when available)")
     ap.add_argument("--audio-track", type=int, default=None,
@@ -499,6 +654,8 @@ def main() -> int:
     if diarize_arg is None:
         d = defaults.get("diarize")
         diarize_arg = "on" if d is True else ("off" if d is False else "auto")
+    rt = args.review_threshold if args.review_threshold is not None else float(
+        defaults.get("review_threshold", 0.6))
 
     src = args.media.resolve()
     if not src.exists():
@@ -507,6 +664,9 @@ def main() -> int:
     home = resolve_home(cfg)
     cli = resolve_cli(cfg, home, args.cli)
     asr_model = resolve_model(cfg, home, quant, args.model)
+
+    if args.retranscribe:
+        return _retranscribe(cfg, home, cli, asr_model, src, args)
     diar_model = resolve_diar_model(cfg, home, args.diar_model)
     diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or diarize_arg == "on") else None
     want_diar = diarize_arg != "off"
@@ -540,6 +700,7 @@ def main() -> int:
         expected["txt"] = out_dir / f"{base}.txt"
     if "vtt" in formats:
         expected["vtt"] = out_dir / f"{base}.vtt"
+    expected["review"] = out_dir / f"{base}.review.txt"
     mpath = meta_dir / f"{base}.meta.json"
 
     # cache: meta matches and every requested artifact exists
@@ -548,7 +709,8 @@ def main() -> int:
             old = json.loads(mpath.read_text(encoding="utf-8"))
             if (old.get("source_sha256") == src_sha and old.get("quant") == quant
                     and old.get("lang") == lang and old.get("audio_track") == track
-                    and old.get("diarized") == bool(can_diar)):
+                    and old.get("diarized") == bool(can_diar)
+                    and old.get("tokens") == bool(args.tokens)):
                 if not args.quiet:
                     log(f"cached: {expected.get('json') or mpath}")
                 return 0
@@ -572,9 +734,11 @@ def main() -> int:
         diar_mode = None
         segs = None
         norm_words = None
+        raw_tokens: list = []
         asr_dt = 0.0
 
-        if can_diar:
+        if can_diar and not args.tokens:
+            # scene mode does not export token-level data; --tokens uses ASR + post diarization
             t0 = time.time()
             scene_words, scene_err = run_scene(cli, asr_model, diar_model, wav)
             scene_dt = time.time() - t0
@@ -596,6 +760,7 @@ def main() -> int:
                 log(f"ASR: {asr_dt:.1f}s for {duration:.1f}s "
                     f"({duration / max(asr_dt, 1e-6):.1f}x)  {device}")
             norm_words = normalize_asr_words(parsed)
+            raw_tokens = parsed.get("tokens") or []
             if can_diar:
                 t0 = time.time()
                 segs = run_diarization(diarize_exe, diar_model, wav)
@@ -621,8 +786,22 @@ def main() -> int:
                 "quant": quant,
                 "diarized": diar_mode is not None,
                 "language_hint": lang,
+                "review_threshold": rt,
             },
         }
+        if args.tokens:
+            vocab = load_vocab(asr_model)
+            tokens_out = []
+            for tok in raw_tokens:
+                tid = tok.get("id")
+                txt = None
+                if vocab and isinstance(tid, int) and 0 <= tid < len(vocab):
+                    txt = clean_piece(vocab[tid])
+                tokens_out.append({"id": tid, "text": txt, "start": tok.get("t"),
+                                   "confidence": tok.get("conf")})
+            rich["tokens"] = tokens_out
+            if not vocab:
+                log("warning: tokenizer pieces not found in the GGUF; tokens carry ids only")
         expected["json"].write_text(json.dumps(rich, ensure_ascii=False, indent=1), encoding="utf-8")
         written.append(expected["json"])
     if "srt" in formats:
@@ -634,6 +813,8 @@ def main() -> int:
     if "vtt" in formats:
         write_vtt(cues, expected["vtt"])
         written.append(expected["vtt"])
+    write_review(scribe, expected["review"], rt)
+    written.append(expected["review"])
 
     meta = {
         "source": str(src),
@@ -651,6 +832,8 @@ def main() -> int:
         "asr_seconds": round(asr_dt, 2),
         "rtf": round(duration / max(asr_dt, 1e-6), 2),
         "words": len([w for w in scribe["words"] if w["type"] == "word"]),
+        "tokens": bool(args.tokens),
+        "review_threshold": rt,
         "formats": formats,
         "created_utc": datetime.now(timezone.utc).isoformat(),
     }

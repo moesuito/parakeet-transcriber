@@ -66,6 +66,23 @@ python <skill>/scripts/transcribe.py "C:\videos\C0103.MP4" --out "C:\videos\edit
 
 Never re-transcribe an unchanged file: the cache (source hash + settings) handles it.
 
+## Review & repair (agent workflow)
+
+Every run also writes `<stem>.review.txt`: the words below the confidence threshold with
+timestamps, plus this guidance. To deliver trustworthy transcripts:
+
+1. Read the full text and the review report. Look for language-drift artifacts — with no
+   language conditioning, a long passage in one language can bias the decoder (e.g. Portuguese
+   words rendered as English near-homophones: "reunião" → "reunion"). Confidence alone does not
+   catch every drift case, so judge the text yourself.
+2. For any suspicious span, get a fresh-context transcription (decoder state reset):
+   `python transcribe.py <media> --retranscribe "START-END"` (seconds, e.g. "7.2-11.3").
+   It writes `<stem>.rt_START-END.json/.txt` with ABSOLUTE times for the span.
+3. Patch the final artifacts (json/srt/txt) with the repaired text, keeping the original
+   timings from the JSON. Re-transcribe a span — never the whole file — for repairs.
+4. `--tokens` adds token-level timestamps and confidences (token text resolved from the model
+   vocab) to the JSON for maximum-precision inspection.
+
 ## Golden rules
 
 1. GPU only for real work (Vulkan); CPU is just a diagnostic path.
