@@ -39,7 +39,7 @@ python <skill>/scripts/transcribe.py <media> [options]
 | `--diarize auto\|on\|off` | auto | speaker attribution (on when the model is installed) |
 | `--audio-track N` | auto (most channels) | which audio stream to use |
 | `--formats json,srt,txt[,vtt]` | json,srt,txt | artifacts to write |
-| `--lang pt` | auto | optional language hint |
+| `--lang pt` | — | forwarded to the runtime; ignored by the v3 model (detection is built-in) |
 | `--force` | — | ignore the cache |
 
 Examples:

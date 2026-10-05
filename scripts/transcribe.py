@@ -470,7 +470,8 @@ def main() -> int:
                     help="output directory (default: <media_parent>/transcripts)")
     ap.add_argument("--quant", default=None, choices=["f16", "q8_0"],
                     help="model precision (default: f16)")
-    ap.add_argument("--lang", default=None, help="optional language hint passed to the CLI")
+    ap.add_argument("--lang", default=None,
+                    help="language hint forwarded to the runtime (ignored by the v3 model)")
     ap.add_argument("--diarize", default=None, choices=["auto", "on", "off"],
                     help="speaker diarization (default: auto = on when available)")
     ap.add_argument("--audio-track", type=int, default=None,

@@ -119,7 +119,7 @@ python scripts/transcribe.py "C:\videos\C0103.MP4" --out "C:\videos\edit\transcr
 | `--diarize auto\|on\|off` | `auto` | speaker attribution (on when the diarization model is installed) |
 | `--audio-track N` | auto (most channels) | which audio stream to use (OBS: 0 = game, 1 = mic) |
 | `--formats json,srt,txt[,vtt]` | `json,srt,txt` | artifacts to write |
-| `--lang pt` | auto | optional language hint |
+| `--lang pt` | — | forwarded to the runtime; **ignored by the v3 model** (language detection is built-in) |
 | `--force` | — | ignore the cache |
 
 ## Configuration
@@ -184,6 +184,36 @@ each prefixed with one timestamp — for reading, notes and LLM consumption:
 ```
 
 When diarization is on, blocks are prefixed with `Speaker N:`.
+
+## Language handling
+
+Parakeet TDT 0.6B v3 detects the language automatically (25 European languages) with no
+configuration or prompting — the `--lang` flag is forwarded to the runtime but has **no
+effect** on this model.
+
+What works well:
+
+- Single-language audio, any of the 25 languages (automatic detection).
+- Short borrowings inside a sentence — English tech terms inside Portuguese speech
+  ("Precisamos atualizar o deployment pipeline antes da reunião") transcribe correctly.
+
+Known limitation — language drift on long stretches:
+
+With no language conditioning, a long passage in one language can bias the decoder for what
+comes next: after an English passage, following Portuguese may be rendered through English
+near-homophones (observed: "reunião" → "reunion", "manhã" → "man"). Conversely, Portuguese
+words spoken with an American accent can turn into English words ("fazer o" → "phaser all").
+If your material is heavily bilingual, transcribe each language stretch as a **separate
+file/run** (fresh decoder context per language) for best results.
+
+Measured examples (synthetic TTS test set):
+
+| Scenario | Result |
+| --- | --- |
+| Portuguese sentence → English sentences → Portuguese sentence | English perfect; the trailing Portuguese degrades |
+| Portuguese sentence with an English noun phrase in the middle | **Perfect** |
+| Brazilian voice reading a long English fragment (BR accent) | Garbled ("portinglês") |
+| American voice reading Portuguese words | Garbled |
 
 ## Performance
 
