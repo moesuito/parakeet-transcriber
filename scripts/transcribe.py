@@ -471,7 +471,7 @@ def main() -> int:
     ap.add_argument("--quant", default=None, choices=["f16", "q8_0"],
                     help="model precision (default: f16)")
     ap.add_argument("--lang", default=None, help="optional language hint passed to the CLI")
-    ap.add_argument("--diarize", default="auto", choices=["auto", "on", "off"],
+    ap.add_argument("--diarize", default=None, choices=["auto", "on", "off"],
                     help="speaker diarization (default: auto = on when available)")
     ap.add_argument("--audio-track", type=int, default=None,
                     help="zero-based audio track index (default: most channels)")
@@ -493,6 +493,11 @@ def main() -> int:
     unknown = [f for f in formats if f not in ("json", "srt", "txt", "vtt")]
     if unknown:
         raise SystemExit(f"unknown format(s): {', '.join(unknown)} (use json,srt,txt,vtt)")
+    # --diarize default: config defaults.diarize (true/false) or "auto"
+    diarize_arg = args.diarize
+    if diarize_arg is None:
+        d = defaults.get("diarize")
+        diarize_arg = "on" if d is True else ("off" if d is False else "auto")
 
     src = args.media.resolve()
     if not src.exists():
@@ -502,10 +507,10 @@ def main() -> int:
     cli = resolve_cli(cfg, home, args.cli)
     asr_model = resolve_model(cfg, home, quant, args.model)
     diar_model = resolve_diar_model(cfg, home, args.diar_model)
-    diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or args.diarize == "on") else None
-    want_diar = args.diarize != "off"
+    diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or diarize_arg == "on") else None
+    want_diar = diarize_arg != "off"
     can_diar = want_diar and diar_model is not None and diarize_exe is not None
-    if args.diarize == "on" and not can_diar:
+    if diarize_arg == "on" and not can_diar:
         raise SystemExit(
             "diarization requested but unavailable:\n"
             f"  diarize binary: {diarize_exe or 'not found'}\n"
