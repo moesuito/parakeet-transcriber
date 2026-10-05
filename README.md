@@ -123,6 +123,7 @@ python scripts/transcribe.py "C:\videos\C0103.MP4" --out "C:\videos\edit\transcr
 | `--tokens` | off | JSON also carries token-level timestamps/confidences (token text via the model vocab) |
 | `--review-threshold F` | `0.6` | confidence threshold for the review report |
 | `--retranscribe "START-END"` | — | fresh-context re-transcription of one span (agent repair) |
+| `--apply-corrections FILE` | — | apply a word-fixes JSON to SRT/TXT/VTT (raw JSON stays untouched; saved for future renders) |
 | `--force` | — | ignore the cache |
 
 ## Configuration
@@ -190,22 +191,38 @@ When diarization is on, blocks are prefixed with `Speaker N:`.
 
 ### Review report & repair (for agents)
 
-Every run writes `<stem>.review.txt`: the words below the confidence threshold with timestamps,
-plus agent guidance. Combined with a read-through of the text, this powers an agentic review
-loop:
+Every run writes `<stem>.review.txt` (words below the confidence threshold + guidance).
+Combined with a read-through of the text, this powers an agentic review loop — **contextual,
+not only language drift**:
 
 ```bash
-# 1. transcribe (JSON + review report)
+# 1. transcribe (raw JSON + review report)
 python scripts/transcribe.py interview.mp4 --tokens
 
-# 2. read review.txt and the text; a drift artifact spotted ("reunion" for "reunião")?
-# 3. re-transcribe just that span with fresh decoder context and patch the final text
+# 2. read review.txt and the text: fix context errors (homophones, names, technical
+#    terms, consistent mishears); for a garbled span, re-transcribe just it (fresh context)
 python scripts/transcribe.py interview.mp4 --retranscribe "68.2-74.5"
+
+# 3. apply word fixes (whole-word, case-insensitive; optional "at" time scoping)
+python scripts/transcribe.py interview.mp4 --apply-corrections fixes.json
 ```
 
-`--retranscribe` writes `<stem>.rt_START-END.json/.txt` whose times are **absolute** (original
-file timeline). Keep the original timings; patch only the text. `--tokens` adds token-level
-timestamps/confidences (token text resolved from the model vocab) to the JSON.
+`fixes.json`:
+
+```json
+{ "replacements": [
+    { "from": "reunion", "to": "reunião" },
+    { "from": "man",     "to": "manhã", "at": [10.4, 11.3] }
+  ] }
+```
+
+The corrected deliverables are **SRT/TXT/VTT**; the JSON keeps the raw capture and timings
+untouched (it is the timing source of truth). Corrections are saved as
+`<stem>.corrections.json` next to the outputs and **re-applied automatically on future
+renders**. Never hand-edit SRT timings.
+
+`--retranscribe` writes `<stem>.rt_START-END.json/.txt` with **absolute** times.
+`--tokens` adds token-level timestamps/confidences (token text resolved from the model vocab).
 
 ## Language handling
 

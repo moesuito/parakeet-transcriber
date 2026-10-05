@@ -68,18 +68,24 @@ Never re-transcribe an unchanged file: the cache (source hash + settings) handle
 
 ## Review & repair (agent workflow)
 
-Every run also writes `<stem>.review.txt`: the words below the confidence threshold with
-timestamps, plus this guidance. To deliver trustworthy transcripts:
+Every run also writes `<stem>.review.txt` (words below the confidence threshold, plus this
+guidance). Review is **contextual**, not only about language drift — deliver clean SRT/TXT:
 
-1. Read the full text and the review report. Look for language-drift artifacts — with no
-   language conditioning, a long passage in one language can bias the decoder (e.g. Portuguese
-   words rendered as English near-homophones: "reunião" → "reunion"). Confidence alone does not
-   catch every drift case, so judge the text yourself.
-2. For any suspicious span, get a fresh-context transcription (decoder state reset):
-   `python transcribe.py <media> --retranscribe "START-END"` (seconds, e.g. "7.2-11.3").
-   It writes `<stem>.rt_START-END.json/.txt` with ABSOLUTE times for the span.
-3. Patch the final artifacts (json/srt/txt) with the repaired text, keeping the original
-   timings from the JSON. Re-transcribe a span — never the whole file — for repairs.
+1. Read the full text and the review report. Flag what the context makes suspicious:
+   low-confidence/garbled words, language-drift artifacts ("reunião" → "reunion" after an
+   English passage), wrong homophones, names and technical terms, and words consistently
+   misheard across the file. Confidence alone does not catch everything — judge the text.
+2. Repair with tooling that keeps subtitles in sync. **SRT/TXT/VTT are the corrected
+   deliverables; the JSON keeps the raw capture and its timings.**
+   - Word fixes (homophones, names, consistent mishears): write a `fixes.json` and run
+     `python transcribe.py <media> --apply-corrections fixes.json`
+     (`{"replacements": [{"from": "reunion", "to": "reunião"}, {"from": "man", "to": "manhã", "at": [10.4, 11.3]}]}`
+     — whole-word, case-insensitive; `at` optional to scope by time; no `at` = every occurrence).
+     Corrections are saved as `<stem>.corrections.json` and re-applied on future renders.
+   - Garbled spans (e.g. drift): `python transcribe.py <media> --retranscribe "START-END"` for a
+     fresh-context transcription of just that span, then fix words with the rule above.
+3. Never hand-edit SRT timings, and never rewrite the JSON words — corrections go through
+   `--apply-corrections`.
 4. `--tokens` adds token-level timestamps and confidences (token text resolved from the model
    vocab) to the JSON for maximum-precision inspection.
 

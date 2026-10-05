@@ -44,6 +44,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -293,6 +294,52 @@ def clean_piece(p: str) -> str:
     return p.replace("\u2581", " ")
 
 
+def split_affixes(s: str) -> tuple[str, str, str]:
+    """Split leading/trailing punctuation from a word core: \"man.\" -> (\"\", \"man\", \".\")."""
+    m = re.match(r"^(\W*)(.*?)(\W*)$", s, re.UNICODE)
+    if not m:
+        return "", s, ""
+    return m.group(1), m.group(2), m.group(3)
+
+
+def apply_corrections(words: list[dict], spec: dict) -> tuple[list[dict], list[dict]]:
+    """Apply whole-word replacements to word entries. Returns (words, stats).
+
+    Rule: {"from": str, "to": str, "at": [start, end]?}
+    - matching is whole-word (punctuation around the word is preserved),
+      case-insensitive; no "at" means every occurrence.
+    """
+    rules = (spec.get("replacements") or []) if isinstance(spec, dict) else []
+    stats = [{"from": str(r.get("from", "")), "to": str(r.get("to", "")), "count": 0} for r in rules]
+    out: list[dict] = []
+    for w in words:
+        if w.get("type") != "word":
+            out.append(w)
+            continue
+        text = w.get("text", "")
+        new = text
+        for i, r in enumerate(rules):
+            frm = str(r.get("from", "")).strip()
+            if not frm:
+                continue
+            at = r.get("at")
+            if at and isinstance(at, (list, tuple)) and len(at) == 2:
+                try:
+                    if not (float(at[0]) <= float(w.get("start", 0.0)) <= float(at[1])):
+                        continue
+                except Exception:
+                    pass
+            pre, core, post = split_affixes(new)
+            if core and core.lower() == frm.lower():
+                new = pre + str(r.get("to", "")) + post
+                stats[i]["count"] += 1
+                break
+        entry = dict(w)
+        entry["text"] = new
+        out.append(entry)
+    return out, stats
+
+
 # ---------------------------------------------------------------- engines
 
 def run_asr(cli: Path, model: Path, wav: Path, lang: str | None) -> tuple[dict, str, float]:
@@ -539,12 +586,19 @@ def write_review(scribe: dict, path: Path, threshold: float) -> None:
     lines += [
         "",
         "Agent guidance:",
-        "1. Also read the full text yourself: a long passage in another language can bias the",
-        "   decoder (drift), e.g. Portuguese words rendered as English near-homophones",
-        "   ('reuniao' -> 'reunion'). Confidence alone does not catch every drift case.",
-        "2. For a suspicious span, get a fresh-context transcription (decoder state reset):",
-        '     python transcribe.py <media> --retranscribe "START-END"',
-        "   and patch the final text with the fresh result, keeping the original timings.",
+        "1. Read the full text and this report. Flag what the CONTEXT makes suspicious:",
+        "   garbled/low-confidence words, language drift ('reuniao' -> 'reunion' after an",
+        "   English passage), wrong homophones, names/technical terms, and words consistently",
+        "   misheard across the file. Confidence alone does not catch everything.",
+        "2. Repair with tooling (SRT/TXT/VTT are the corrected deliverables; the raw JSON keeps",
+        "   the original timings and must not be rewritten by hand):",
+        '   a) garbled span -> python transcribe.py <media> --retranscribe "START-END"',
+        "   b) word fixes   -> python transcribe.py <media> --apply-corrections fixes.json",
+        '      e.g. fixes.json = {"replacements": [{"from": "reunion", "to": "reuniao"},',
+        '            {"from": "man", "to": "manha", "at": [10.4, 11.3]}]}',
+        "      whole-word, case-insensitive; 'at' scopes by time; corrections are saved and",
+        "      re-applied on future renders.",
+        "3. Never hand-edit SRT timings.",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -609,6 +663,58 @@ def _retranscribe(cfg: dict, home: Path, cli: Path, asr_model: Path, src: Path, 
     return 0
 
 
+def _apply_corrections(src: Path, args) -> int:
+    """Apply a corrections JSON to SRT/TXT/VTT from an existing transcript (JSON stays raw)."""
+    out_dir = (args.out or (src.parent / "transcripts")).resolve()
+    audio, _duration = ffprobe_streams(src)
+    track = pick_track(audio, args.audio_track)
+    base = src.stem + ("" if track == 0 else f".track{track}")
+    jpath = out_dir / f"{base}.json"
+    if not jpath.exists():
+        raise SystemExit(f"raw transcript not found: {jpath} (run a transcription first)")
+    spec_src = Path(args.apply_corrections)
+    if not spec_src.exists():
+        raise SystemExit(f"corrections file not found: {spec_src}")
+    try:
+        spec = json.loads(spec_src.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise SystemExit(f"invalid corrections JSON: {e}")
+    corr_path = out_dir / f"{base}.corrections.json"
+    corr_path.write_text(json.dumps(spec, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    rich = json.loads(jpath.read_text(encoding="utf-8"))
+    corrected, stats = apply_corrections(rich.get("words", []), spec)
+
+    cues = group_cues(corrected)
+    srt = out_dir / f"{base}.srt"
+    txt = out_dir / f"{base}.txt"
+    write_srt(cues, srt)
+    write_txt({"words": corrected}, txt, float(rich.get("meta", {}).get("duration_s") or 0.0))
+    vtt = out_dir / f"{base}.vtt"
+    if vtt.exists():
+        write_vtt(cues, vtt)
+
+    mpath = out_dir / ".meta" / f"{base}.meta.json"
+    if mpath.exists():
+        try:
+            meta = json.loads(mpath.read_text(encoding="utf-8"))
+            meta["corrections"] = {"file": corr_path.name,
+                                   "replacements": sum(s["count"] for s in stats)}
+            mpath.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            pass
+
+    if not args.quiet:
+        total = sum(s["count"] for s in stats)
+        log(f"corrections applied: {total} word(s) across {len(stats)} rule(s)")
+        for s in stats:
+            warn = "" if s["count"] else "   <-- no matches!"
+            log(f"  {s['from']!r} -> {s['to']!r}  x{s['count']}{warn}")
+        log(f"  {srt}")
+        log(f"  {txt}")
+    return 0
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> int:
@@ -627,6 +733,9 @@ def main() -> int:
                     help="confidence threshold for the review report (default 0.6)")
     ap.add_argument("--retranscribe", default=None, metavar="START-END",
                     help='fresh-context re-transcription of one span (seconds), e.g. "7.2-11.3"')
+    ap.add_argument("--apply-corrections", default=None, metavar="FILE",
+                    help="apply a word-corrections JSON to SRT/TXT/VTT (the raw JSON stays "
+                         "untouched); the corrections are saved for future renders")
     ap.add_argument("--diarize", default=None, choices=["auto", "on", "off"],
                     help="speaker diarization (default: auto = on when available)")
     ap.add_argument("--audio-track", type=int, default=None,
@@ -667,6 +776,8 @@ def main() -> int:
 
     if args.retranscribe:
         return _retranscribe(cfg, home, cli, asr_model, src, args)
+    if args.apply_corrections:
+        return _apply_corrections(src, args)
     diar_model = resolve_diar_model(cfg, home, args.diar_model)
     diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or diarize_arg == "on") else None
     want_diar = diarize_arg != "off"
@@ -774,7 +885,15 @@ def main() -> int:
     scribe = words_to_scribe(norm_words, segs)
 
     written: list[Path] = []
-    cues = group_cues(scribe["words"])
+    corr_path = out_dir / f"{base}.corrections.json"
+    render_words = scribe["words"]
+    if corr_path.exists():
+        try:
+            render_words, _stats = apply_corrections(
+                scribe["words"], json.loads(corr_path.read_text(encoding="utf-8")))
+        except Exception:
+            render_words = scribe["words"]
+    cues = group_cues(render_words)
     if "json" in formats:
         rich = {
             "text": scribe["text"],
@@ -808,7 +927,7 @@ def main() -> int:
         write_srt(cues, expected["srt"])
         written.append(expected["srt"])
     if "txt" in formats:
-        write_txt(scribe, expected["txt"], duration)
+        write_txt({"words": render_words}, expected["txt"], duration)
         written.append(expected["txt"])
     if "vtt" in formats:
         write_vtt(cues, expected["vtt"])
