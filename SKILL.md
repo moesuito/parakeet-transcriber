@@ -1,5 +1,6 @@
 ---
 name: "parakeet-transcriber"
+license: "Apache-2.0"
 description: "Offline, GPU-accelerated speech-to-text with word-level timestamps and optional speaker diarization (NVIDIA Parakeet TDT 0.6B v3 on Vulkan via parakeet.cpp). Produces JSON (maximum precision), SRT (subtitles) and TXT (reading). Use whenever you need to transcribe audio/video, subtitle a file, get per-word timestamps, identify who spoke, or feed an editing workflow (video-use, HyperFrames). No cloud, no API keys. Keywords: transcribe, transcription, speech-to-text, subtitles, captions, SRT, timestamps, word-level, speaker diarization, offline."
 ---
 

@@ -337,14 +337,22 @@ the clips come out perfect).
 
 ## Licenses and credits
 
-- This project (skill, `scripts/transcribe.py`, docs): **MIT** © 2026 João Alano
-- [parakeet.cpp](https://github.com/mudler/parakeet.cpp) runtime: **MIT** (LocalAI team)
-- [parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) weights: **CC-BY-4.0** (NVIDIA)
-- [Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (Sortformer) weights: **OpenMDW-1.1** (NVIDIA)
-- GGUF conversions: [mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)
-
-The prebuilt Windows binaries in Releases are compiled from `mudler/parakeet.cpp` master
-(commit recorded in the release notes).
+- This project (skill, `scripts/transcribe.py`, `install.ps1`, docs): **Apache-2.0** © 2026 João Alano
+  — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+- **NVIDIA** — the models this project runs:
+  - [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) speech recognition
+    weights: **CC-BY-4.0** © NVIDIA.
+  - [Nemotron-3-Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) (Sortformer)
+    speaker-diarization weights: **OpenMDW-1.1** © NVIDIA.
+- **[parakeet.cpp](https://github.com/mudler/parakeet.cpp)** — the **MIT**-licensed C++/ggml
+  inference runtime by the **LocalAI team** (Ettore Di Giacinto, Richard Palethorpe). The
+  prebuilt Windows binaries in this repository's Releases are compiled from it (source commit
+  recorded in the release notes).
+- **[ggml](https://github.com/ggml-org/ggml)** — **MIT**-licensed tensor library used by the runtime.
+- **[mudler/parakeet-cpp-gguf](https://huggingface.co/mudler/parakeet-cpp-gguf)** — GGUF conversions
+  of the NVIDIA weights used by the installer.
+- Model weights are **downloaded by the installer from Hugging Face and are not redistributed**
+  in this repository; each weight keeps the license of its source (links above).
 
 ## Troubleshooting
 

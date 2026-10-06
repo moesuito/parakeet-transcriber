@@ -1,0 +1,30 @@
+parakeet-transcriber
+Copyright 2026 João Alano
+
+This product includes software and model weights developed and licensed by
+third parties:
+
+1. parakeet.cpp — https://github.com/mudler/parakeet.cpp
+   Copyright the LocalAI team (Ettore Di Giacinto, Richard Palethorpe).
+   Licensed under the MIT License.
+   The prebuilt Windows binaries in this repository's Releases are compiled
+   from this project (source commit recorded in the release notes).
+
+2. NVIDIA Parakeet TDT 0.6B v3 — speech recognition weights
+   https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+   Copyright NVIDIA. Licensed under CC-BY-4.0.
+   Downloaded separately by the installer from Hugging Face; not redistributed
+   in this repository.
+
+3. NVIDIA Nemotron-3-Diarization (Sortformer) — speaker diarization weights
+   https://huggingface.co/nvidia/Nemotron-3-Diarization
+   Copyright NVIDIA. Licensed under OpenMDW-1.1.
+   Downloaded separately by the installer from Hugging Face; not redistributed
+   in this repository.
+
+4. ggml — https://github.com/ggml-org/ggml
+   Licensed under the MIT License (tensor library used by the runtime).
+
+5. GGUF model conversions — https://huggingface.co/mudler/parakeet-cpp-gguf
+   Conversions of the NVIDIA weights published by the LocalAI team
+   (mudler / mudler).
