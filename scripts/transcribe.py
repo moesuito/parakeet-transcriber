@@ -594,8 +594,9 @@ def write_review(scribe: dict, path: Path, threshold: float) -> None:
         "   the original timings and must not be rewritten by hand):",
         '   a) garbled span -> python transcribe.py <media> --retranscribe "START-END"',
         "   b) word fixes   -> python transcribe.py <media> --apply-corrections fixes.json",
-        "      (add --rewrite-json to carry fixes into <stem>.json too; timings untouched,",
-        "       original text kept per changed word as raw_text)",
+        "      (corrections are carried into all deliverables: json + srt + txt; timings",
+        "       untouched, original text kept per changed word as raw_text; --keep-raw-json",
+        "       leaves <stem>.json untouched)",
         '      e.g. fixes.json = {"replacements": [{"from": "reunion", "to": "reuniao"},',
         '            {"from": "man", "to": "manha", "at": [10.4, 11.3]}]}',
         "      whole-word, case-insensitive; 'at' scopes by time; corrections are saved and",
@@ -665,6 +666,21 @@ def _retranscribe(cfg: dict, home: Path, cli: Path, asr_model: Path, src: Path, 
     return 0
 
 
+def carry_corrections_into_json(rich: dict, original: list[dict], corrected: list[dict],
+                                corr_name: str) -> int:
+    """Write corrected words into the JSON (timings untouched; original kept as raw_text)."""
+    changed = 0
+    for orig, new in zip(original, corrected):
+        if new.get("type") == "word" and new.get("text") != orig.get("text"):
+            new["raw_text"] = orig.get("text", "")
+            changed += 1
+    rich["words"] = corrected
+    words_only = [w for w in corrected if w.get("type") == "word"]
+    rich["text"] = fix_text(" ".join(w["text"] for w in words_only)).strip()
+    rich.setdefault("meta", {})["corrections"] = {"file": corr_name, "words_changed": changed}
+    return changed
+
+
 def _apply_corrections(src: Path, args) -> int:
     """Apply a corrections JSON to SRT/TXT/VTT from an existing transcript (JSON stays raw)."""
     out_dir = (args.out or (src.parent / "transcripts")).resolve()
@@ -688,17 +704,8 @@ def _apply_corrections(src: Path, args) -> int:
     original = rich.get("words", [])
     corrected, stats = apply_corrections(original, spec)
 
-    if args.rewrite_json:
-        changed = 0
-        for orig, new in zip(original, corrected):
-            if new.get("type") == "word" and new.get("text") != orig.get("text"):
-                new["raw_text"] = orig.get("text", "")
-                changed += 1
-        rich["words"] = corrected
-        rich.setdefault("meta", {})["corrections"] = {
-            "file": corr_path.name,
-            "words_changed": changed,
-        }
+    if not args.keep_raw_json:
+        carry_corrections_into_json(rich, original, corrected, corr_path.name)
         jpath.write_text(json.dumps(rich, ensure_ascii=False, indent=1), encoding="utf-8")
 
     cues = group_cues(corrected)
@@ -728,8 +735,8 @@ def _apply_corrections(src: Path, args) -> int:
             log(f"  {s['from']!r} -> {s['to']!r}  x{s['count']}{warn}")
         log(f"  {srt}")
         log(f"  {txt}")
-        if args.rewrite_json:
-            log(f"  {jpath}  (json rewritten; original text kept as raw_text per changed word)")
+        if not args.keep_raw_json:
+            log(f"  {jpath}  (corrections carried into the json; original text kept as raw_text)")
     return 0
 
 
@@ -752,11 +759,11 @@ def main() -> int:
     ap.add_argument("--retranscribe", default=None, metavar="START-END",
                     help='fresh-context re-transcription of one span (seconds), e.g. "7.2-11.3"')
     ap.add_argument("--apply-corrections", default=None, metavar="FILE",
-                    help="apply a word-corrections JSON to SRT/TXT/VTT (the raw JSON stays "
-                         "untouched); the corrections are saved for future renders")
-    ap.add_argument("--rewrite-json", action="store_true",
-                    help="with --apply-corrections: also rewrite <stem>.json with the corrected "
-                         "words (timings untouched; original text kept per word as raw_text)")
+                    help="apply a word-corrections JSON to the transcript (json/srt/txt); "
+                         "corrections are saved for future renders")
+    ap.add_argument("--keep-raw-json", action="store_true",
+                    help="leave <stem>.json untouched (default: corrections are carried into all "
+                         "deliverables; original text kept per word as raw_text)")
     ap.add_argument("--diarize", default=None, choices=["auto", "on", "off"],
                     help="speaker diarization (default: auto = on when available)")
     ap.add_argument("--audio-track", type=int, default=None,
@@ -907,18 +914,20 @@ def main() -> int:
 
     written: list[Path] = []
     corr_path = out_dir / f"{base}.corrections.json"
+    corr_spec = None
     render_words = scribe["words"]
     if corr_path.exists():
         try:
-            render_words, _stats = apply_corrections(
-                scribe["words"], json.loads(corr_path.read_text(encoding="utf-8")))
+            corr_spec = json.loads(corr_path.read_text(encoding="utf-8"))
+            render_words, _stats = apply_corrections(scribe["words"], corr_spec)
         except Exception:
+            corr_spec = None
             render_words = scribe["words"]
     cues = group_cues(render_words)
     if "json" in formats:
         rich = {
             "text": scribe["text"],
-            "words": scribe["words"],
+            "words": render_words,
             "meta": {
                 "source": str(src),
                 "duration_s": round(duration, 3),
@@ -929,6 +938,11 @@ def main() -> int:
                 "review_threshold": rt,
             },
         }
+        if corr_spec is not None:
+            if args.keep_raw_json:
+                rich["words"] = scribe["words"]
+            else:
+                carry_corrections_into_json(rich, scribe["words"], render_words, corr_path.name)
         if args.tokens:
             vocab = load_vocab(asr_model)
             tokens_out = []
