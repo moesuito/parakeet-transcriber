@@ -76,7 +76,9 @@ guidance). Review is **contextual**, not only about language drift — deliver c
    English passage), wrong homophones, names and technical terms, and words consistently
    misheard across the file. Confidence alone does not catch everything — judge the text.
 2. Repair with tooling that keeps subtitles in sync. **SRT/TXT/VTT are the corrected
-   deliverables; the JSON keeps the raw capture and its timings.**
+   deliverables; the JSON keeps the raw capture and its timings** — unless you pass
+   `--rewrite-json` with `--apply-corrections`, which carries the corrections into
+   `<stem>.json` too (timings untouched; original text kept per changed word as `raw_text`).
    - Word fixes (homophones, names, consistent mishears): write a `fixes.json` and run
      `python transcribe.py <media> --apply-corrections fixes.json`
      (`{"replacements": [{"from": "reunion", "to": "reunião"}, {"from": "man", "to": "manhã", "at": [10.4, 11.3]}]}`
@@ -84,8 +86,8 @@ guidance). Review is **contextual**, not only about language drift — deliver c
      Corrections are saved as `<stem>.corrections.json` and re-applied on future renders.
    - Garbled spans (e.g. drift): `python transcribe.py <media> --retranscribe "START-END"` for a
      fresh-context transcription of just that span, then fix words with the rule above.
-3. Never hand-edit SRT timings, and never rewrite the JSON words — corrections go through
-   `--apply-corrections`.
+3. Never hand-edit SRT timings or JSON words — corrections always go through
+   `--apply-corrections` (add `--rewrite-json` if the JSON itself should carry them).
 4. `--tokens` adds token-level timestamps and confidences (token text resolved from the model
    vocab) to the JSON for maximum-precision inspection.
 

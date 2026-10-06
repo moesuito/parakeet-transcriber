@@ -594,6 +594,8 @@ def write_review(scribe: dict, path: Path, threshold: float) -> None:
         "   the original timings and must not be rewritten by hand):",
         '   a) garbled span -> python transcribe.py <media> --retranscribe "START-END"',
         "   b) word fixes   -> python transcribe.py <media> --apply-corrections fixes.json",
+        "      (add --rewrite-json to carry fixes into <stem>.json too; timings untouched,",
+        "       original text kept per changed word as raw_text)",
         '      e.g. fixes.json = {"replacements": [{"from": "reunion", "to": "reuniao"},',
         '            {"from": "man", "to": "manha", "at": [10.4, 11.3]}]}',
         "      whole-word, case-insensitive; 'at' scopes by time; corrections are saved and",
@@ -683,7 +685,21 @@ def _apply_corrections(src: Path, args) -> int:
     corr_path.write_text(json.dumps(spec, ensure_ascii=False, indent=1), encoding="utf-8")
 
     rich = json.loads(jpath.read_text(encoding="utf-8"))
-    corrected, stats = apply_corrections(rich.get("words", []), spec)
+    original = rich.get("words", [])
+    corrected, stats = apply_corrections(original, spec)
+
+    if args.rewrite_json:
+        changed = 0
+        for orig, new in zip(original, corrected):
+            if new.get("type") == "word" and new.get("text") != orig.get("text"):
+                new["raw_text"] = orig.get("text", "")
+                changed += 1
+        rich["words"] = corrected
+        rich.setdefault("meta", {})["corrections"] = {
+            "file": corr_path.name,
+            "words_changed": changed,
+        }
+        jpath.write_text(json.dumps(rich, ensure_ascii=False, indent=1), encoding="utf-8")
 
     cues = group_cues(corrected)
     srt = out_dir / f"{base}.srt"
@@ -712,6 +728,8 @@ def _apply_corrections(src: Path, args) -> int:
             log(f"  {s['from']!r} -> {s['to']!r}  x{s['count']}{warn}")
         log(f"  {srt}")
         log(f"  {txt}")
+        if args.rewrite_json:
+            log(f"  {jpath}  (json rewritten; original text kept as raw_text per changed word)")
     return 0
 
 
@@ -736,6 +754,9 @@ def main() -> int:
     ap.add_argument("--apply-corrections", default=None, metavar="FILE",
                     help="apply a word-corrections JSON to SRT/TXT/VTT (the raw JSON stays "
                          "untouched); the corrections are saved for future renders")
+    ap.add_argument("--rewrite-json", action="store_true",
+                    help="with --apply-corrections: also rewrite <stem>.json with the corrected "
+                         "words (timings untouched; original text kept per word as raw_text)")
     ap.add_argument("--diarize", default=None, choices=["auto", "on", "off"],
                     help="speaker diarization (default: auto = on when available)")
     ap.add_argument("--audio-track", type=int, default=None,

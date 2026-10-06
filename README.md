@@ -124,6 +124,7 @@ python scripts/transcribe.py "C:\videos\C0103.MP4" --out "C:\videos\edit\transcr
 | `--review-threshold F` | `0.6` | confidence threshold for the review report |
 | `--retranscribe "START-END"` | — | fresh-context re-transcription of one span (agent repair) |
 | `--apply-corrections FILE` | — | apply a word-fixes JSON to SRT/TXT/VTT (raw JSON stays untouched; saved for future renders) |
+| `--rewrite-json` | off | with `--apply-corrections`: also carry the corrections into `<stem>.json` (timings untouched; original text kept per changed word as `raw_text`) |
 | `--force` | — | ignore the cache |
 
 ## Configuration
@@ -216,10 +217,13 @@ python scripts/transcribe.py interview.mp4 --apply-corrections fixes.json
   ] }
 ```
 
-The corrected deliverables are **SRT/TXT/VTT**; the JSON keeps the raw capture and timings
-untouched (it is the timing source of truth). Corrections are saved as
-`<stem>.corrections.json` next to the outputs and **re-applied automatically on future
-renders**. Never hand-edit SRT timings.
+The corrected deliverables are **SRT/TXT/VTT**; by default the JSON keeps the raw capture and
+timings untouched (it is the timing source of truth). Add `--rewrite-json` to
+`--apply-corrections` to carry the corrections into `<stem>.json` as well — timings stay
+untouched and the original text of each changed word is preserved as `raw_text`. Corrections
+are saved as `<stem>.corrections.json` next to the outputs and **re-applied automatically on
+future renders** (a full re-run regenerates the raw JSON; the corrections keep applying to
+SRT/TXT/VTT). Never hand-edit SRT timings.
 
 `--retranscribe` writes `<stem>.rt_START-END.json/.txt` with **absolute** times.
 `--tokens` adds token-level timestamps/confidences (token text resolved from the model vocab).
