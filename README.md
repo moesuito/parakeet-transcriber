@@ -16,7 +16,61 @@ No cloud, no API keys, no account. One model file, one binary folder, done.
 
 ---
 
-## Install — step-by-step for AI agents
+## Quick install (one line)
+
+```powershell
+irm https://raw.githubusercontent.com/moesuito/parakeet-transcriber/main/install.ps1 | iex
+```
+
+Works on **Windows PowerShell 5.1 and PowerShell 7+**. The installer:
+
+1. downloads the **Vulkan runtime** from this repo's Releases;
+2. downloads the **model** (Parakeet TDT 0.6B v3 f16, 1.37 GB) and the optional
+   **diarization model** (191 MB) from Hugging Face;
+3. installs the skill into **every AI-agent directory it detects** — OpenCode, Claude Code,
+   Codex, Gemini, Cursor, Antigravity, Cline, Kimi, Qwen, Grok, Kiro, Copilot, Continue and
+   the generic `~/.agents/skills` standard — plus a canonical copy at `<INSTALL>\skill`;
+4. registers a `/transcribe` command where the agent supports it (OpenCode, Claude Code,
+   Codex, Gemini);
+5. writes a per-install `config.json`, sets `PARAKEET_TRANSCRIBER_HOME`, and optionally runs
+   a **smoke test** (TTS sample → real GPU transcription) with `-Test`.
+
+Default install dir: `%USERPROFILE%\.parakeet-transcriber`. **Restart your agent** after install.
+
+Prefer control? Download `install.ps1` and run it with flags (both PS editions):
+
+```powershell
+.\install.ps1 -SkipDiarization -Test
+.\install.ps1 -InstallDir D:\AI\parakeet -DryRun        # preview, changes nothing
+.\install.ps1 -RuntimeDir C:\AI\stt\bin\master -ModelsDir C:\AI\stt\models -SkipRuntime -SkipModels
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-InstallDir DIR` | install root (default `%USERPROFILE%\.parakeet-transcriber`) |
+| `-RuntimeDir DIR` / `-ModelsDir DIR` | use existing binaries/models (default `<INSTALL>\bin` / `<INSTALL>\models`) |
+| `-SkipRuntime` / `-SkipModels` | keep what already exists |
+| `-SkipDiarization` | skip the optional 191 MB diarization model |
+| `-SkipAgents` / `-SkipSkill` | do not touch agent dirs / do not (re)install the skill copy |
+| `-Agents id1,id2` | restrict agent registration to these ids |
+| `-Test` | run the smoke test at the end |
+| `-Force` | re-download / overwrite existing files |
+| `-DryRun` | print the plan, change nothing |
+
+> **GPU:** the runtime uses **Vulkan** — any Vulkan-capable GPU works (AMD, NVIDIA, Intel; the
+> loader ships with the GPU driver). Without Vulkan it falls back to CPU (much slower); force
+> a device with `PARAKEET_DEVICE` (`Vulkan0`, `Vulkan1`, `cpu`).
+
+### Agent prompt (copy this)
+
+> Install the parakeet-transcriber skill on this machine:
+> `irm https://raw.githubusercontent.com/moesuito/parakeet-transcriber/main/install.ps1 | iex`
+> Then follow the repository README "Verification checklist (agents)" and report what was
+> installed (paths, detected agents, smoke test result).
+
+## Manual install (fallback)
+
+*(the one-liner above automates everything below)*
 
 **You are (probably) an AI agent installing this skill for your user.**
 Follow these steps in order, then verify and report what you installed.
@@ -98,6 +152,21 @@ Load the `parakeet-transcriber` skill and transcribe: $ARGUMENTS
 ```
 
 ---
+
+## Verification checklist (agents)
+
+After running the installer, verify and report to the user:
+
+1. **Files** — the canonical install exists:
+   `<INSTALL>\skill\parakeet-transcriber\scripts\transcribe.py`, and every detected agent has
+   `<agent-root>\skills\parakeet-transcriber\SKILL.md`.
+2. **CLI** — `python <skill>\scripts\transcribe.py --help` prints the usage (Python 3.10+).
+3. **Real run** — transcribe anything
+   (`python <skill>\scripts\transcribe.py <file> --formats txt --quiet`) and expect
+   `ok: N words ->` plus a `using device: Vulkan0`-style line; or re-run the installer with
+   `-SkipRuntime -SkipModels -Test` for the built-in smoke test.
+4. **Report** — install dir, detected agents, smoke-test result, and remind the user to
+   restart the agent session so `/transcribe` (where registered) becomes available.
 
 ## Usage
 

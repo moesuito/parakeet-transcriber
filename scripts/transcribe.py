@@ -73,7 +73,7 @@ def log(msg: str) -> None:
 def load_config() -> dict:
     if CONFIG_PATH.exists():
         try:
-            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         except Exception as e:
             raise SystemExit(f"config.json is invalid: {e}")
     return {}
@@ -278,7 +278,7 @@ def load_vocab(model_path: Path) -> list[str] | None:
     cache = Path(str(model_path) + ".vocab.json")
     if cache.exists():
         try:
-            return json.loads(cache.read_text(encoding="utf-8"))
+            return json.loads(cache.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
     pieces = _read_gguf_string_array(model_path, "parakeet.tokenizer.pieces")
@@ -694,13 +694,13 @@ def _apply_corrections(src: Path, args) -> int:
     if not spec_src.exists():
         raise SystemExit(f"corrections file not found: {spec_src}")
     try:
-        spec = json.loads(spec_src.read_text(encoding="utf-8"))
+        spec = json.loads(spec_src.read_text(encoding="utf-8-sig"))
     except Exception as e:
         raise SystemExit(f"invalid corrections JSON: {e}")
     corr_path = out_dir / f"{base}.corrections.json"
     corr_path.write_text(json.dumps(spec, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    rich = json.loads(jpath.read_text(encoding="utf-8"))
+    rich = json.loads(jpath.read_text(encoding="utf-8-sig"))
     original = rich.get("words", [])
     corrected, stats = apply_corrections(original, spec)
 
@@ -720,7 +720,7 @@ def _apply_corrections(src: Path, args) -> int:
     mpath = out_dir / ".meta" / f"{base}.meta.json"
     if mpath.exists():
         try:
-            meta = json.loads(mpath.read_text(encoding="utf-8"))
+            meta = json.loads(mpath.read_text(encoding="utf-8-sig"))
             meta["corrections"] = {"file": corr_path.name,
                                    "replacements": sum(s["count"] for s in stats)}
             mpath.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -845,7 +845,7 @@ def main() -> int:
     # cache: meta matches and every requested artifact exists
     if not args.force and mpath.exists() and all(p.exists() for p in expected.values()):
         try:
-            old = json.loads(mpath.read_text(encoding="utf-8"))
+            old = json.loads(mpath.read_text(encoding="utf-8-sig"))
             if (old.get("source_sha256") == src_sha and old.get("quant") == quant
                     and old.get("lang") == lang and old.get("audio_track") == track
                     and old.get("diarized") == bool(can_diar)
@@ -918,7 +918,7 @@ def main() -> int:
     render_words = scribe["words"]
     if corr_path.exists():
         try:
-            corr_spec = json.loads(corr_path.read_text(encoding="utf-8"))
+            corr_spec = json.loads(corr_path.read_text(encoding="utf-8-sig"))
             render_words, _stats = apply_corrections(scribe["words"], corr_spec)
         except Exception:
             corr_spec = None
