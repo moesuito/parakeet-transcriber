@@ -39,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/jobs/{id}", get(get_job).delete(delete_job))
         .route("/corrections", get(list_corrections).post(add_correction))
         .route("/corrections/import", post(import_corrections))
+        .route("/corrections/reload", post(reload_corrections))
         .route("/corrections/{id}", delete(delete_correction))
         .layer(axum::extract::DefaultBodyLimit::max(max_body))
         .with_state(state)
@@ -170,7 +171,7 @@ async fn run(
     diarize: bool,
 ) -> Result<Transcript, ApiError> {
     let (name, bytes) = parsed.file.ok_or_else(|| ApiError::bad_request("a file field is required"))?;
-    let (path, hash) = save_upload(&state.cfg, &name, &bytes)?;
+    let (mut path, hash) = save_upload(&state.cfg, &name, &bytes)?;
     let key = cache_key(&hash, &parsed.language, diarize);
 
     if let Some(mut cached) = transcript_from_cache(&state.store, &key).await {
@@ -181,11 +182,28 @@ async fn run(
     }
 
     let id = uuid::Uuid::new_v4().to_string();
+
+    // Keep the original audio when the archive is enabled; the queue then leaves it alone.
+    let mut archive = false;
+    let mut audio_path = None;
+    if state.cfg.audio_keep > 0 {
+        let dir = std::path::Path::new(&state.cfg.audio_dir);
+        if std::fs::create_dir_all(dir).is_ok() {
+            let target = crate::storage::archive_path(dir, &id, &name);
+            if std::fs::rename(&path, &target).is_ok() {
+                path = target.clone();
+                archive = true;
+                audio_path = Some(target.to_string_lossy().to_string());
+            }
+        }
+    }
+
     record_queued(
         &state.store,
         &id,
         &name,
         &json!({ "language": parsed.language, "diarize": diarize }),
+        audio_path.clone(),
     )
     .map_err(ApiError::from)?;
 
@@ -197,6 +215,7 @@ async fn run(
             name,
             language: parsed.language.clone(),
             diarize,
+            archive,
             cache_key: key,
         })
         .await
@@ -334,6 +353,7 @@ fn job_json(job: &crate::store::JobRecord) -> Value {
         "source": job.source,
         "duration_ms": job.duration_ms,
         "error": job.error,
+        "audio": job.audio_path,
         "text": if job.status == "done" { job.text.clone() } else { None },
     })
 }
@@ -352,6 +372,7 @@ fn rule_json(rule: &Rule) -> Value {
         "case_sensitive": rule.case_sensitive,
         "created_at": rule.created_at,
         "hits": rule.hits,
+        "source": rule.source,
     })
 }
 
@@ -377,6 +398,7 @@ async fn add_correction(State(state): State<AppState>, Json(input): Json<RuleInp
         case_sensitive: input.case_sensitive,
         created_at: crate::formats::now(),
         hits: 0,
+        source: "user".into(),
     };
     state.store.add_rule(&rule).map_err(ApiError::from)?;
     Ok(Json(rule_json(&rule)))
@@ -412,11 +434,24 @@ async fn import_corrections(State(state): State<AppState>, Json(body): Json<Fixe
             case_sensitive: item.case_sensitive,
             created_at: crate::formats::now(),
             hits: 0,
+            source: "user".into(),
         };
         state.store.add_rule(&rule).map_err(ApiError::from)?;
         added.push(rule_json(&rule));
     }
     Ok(Json(json!({ "added": added })))
+}
+
+/// Re-reads the community lexicon file (after pulling a new `all.json`, for example).
+async fn reload_corrections(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    if state.cfg.corrections_file.is_empty() {
+        return Err(ApiError::bad_request("no corrections_file is configured"));
+    }
+    let imported =
+        crate::corrections::import_community(&state.store, std::path::Path::new(&state.cfg.corrections_file))
+            .map_err(ApiError::from)?;
+    let total = state.store.rules().map_err(ApiError::from)?.len();
+    Ok(Json(json!({ "imported": imported, "total": total })))
 }
 
 fn text_response(content_type: &'static str, body: String) -> Response {

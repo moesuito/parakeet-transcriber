@@ -9,6 +9,7 @@ mod corrections;
 mod engine;
 mod formats;
 mod queue;
+mod storage;
 mod store;
 
 use std::path::PathBuf;
@@ -16,8 +17,6 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    config::init_logging();
-
     let mut config_path: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -36,12 +35,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = Arc::new(config::Config::load(config_path.as_deref())?);
+    config::init_logging(&cfg.log_dir);
     tracing::info!(bind = %cfg.bind, model = %cfg.model_id, "starting parakeet-server-rs");
 
     let store = Arc::new(store::Store::open(&cfg.database)?);
     match store.purge(cfg.retention_days) {
         Ok(n) if n > 0 => tracing::info!(removed = n, "purged old jobs"),
         _ => {}
+    }
+    if cfg.audio_keep > 0 {
+        let dir = std::path::PathBuf::from(&cfg.audio_dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let removed = storage::trim(&dir, cfg.audio_keep);
+        tracing::info!(
+            dir = %dir.display(),
+            keep = cfg.audio_keep,
+            removed,
+            "audio archive ready"
+        );
+    }
+
+    if !cfg.corrections_file.is_empty() {
+        match corrections::import_community(&store, std::path::Path::new(&cfg.corrections_file)) {
+            Ok(0) => tracing::info!("community corrections already up to date"),
+            Ok(count) => tracing::info!(count, "imported community corrections"),
+            Err(err) => tracing::warn!(%err, "community corrections not imported"),
+        }
     }
 
     let engine = engine::Engine::new(cfg.engine.clone());

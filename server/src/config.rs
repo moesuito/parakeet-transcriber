@@ -34,9 +34,23 @@ pub struct Config {
     pub cli: String,
     #[serde(default = "default_diar_model")]
     pub diar_model: String,
-    /// Keep finished jobs in the database for this many days (0 = forever).
+    /// Keep finished jobs (and their transcripts) for this many days (0 = forever).
     #[serde(default = "default_retention_days")]
     pub retention_days: i64,
+    /// How many original audio files to keep on disk (0 = delete right after use).
+    /// The newest ones are kept; the oldest is deleted when a new file goes past the limit.
+    #[serde(default = "default_audio_keep")]
+    pub audio_keep: usize,
+    /// Where those audio files live.
+    #[serde(default = "default_audio_dir")]
+    pub audio_dir: String,
+    /// Directory for the daily log file. Empty writes to stderr instead.
+    #[serde(default = "default_log_dir")]
+    pub log_dir: String,
+    /// `parakeet-corrections` style lexicon imported as community rules on start.
+    /// Empty disables the import.
+    #[serde(default = "default_corrections_file")]
+    pub corrections_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +108,19 @@ fn default_diar_model() -> String {
     r"C:\AI\STT\models\nemotron-3-diarization-f16.gguf".into()
 }
 fn default_retention_days() -> i64 {
-    30
+    0
+}
+fn default_audio_keep() -> usize {
+    20
+}
+fn default_audio_dir() -> String {
+    r"C:\AI\stt\data\audio".into()
+}
+fn default_corrections_file() -> String {
+    r"C:\AI\stt\config\community-corrections.json".into()
+}
+fn default_log_dir() -> String {
+    r"C:\AI\stt\logs".into()
 }
 fn default_engine_exe() -> String {
     r"C:\AI\STT\bin\master\parakeet-server.exe".into()
@@ -155,6 +181,10 @@ impl Default for Config {
             cli: default_cli(),
             diar_model: default_diar_model(),
             retention_days: default_retention_days(),
+            audio_keep: default_audio_keep(),
+            audio_dir: default_audio_dir(),
+            corrections_file: default_corrections_file(),
+            log_dir: default_log_dir(),
         }
     }
 }
@@ -200,9 +230,26 @@ impl Config {
     }
 }
 
-pub fn init_logging() {
+pub fn init_logging(log_dir: &str) {
     use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_env("PARAKEET_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    let filter = EnvFilter::try_from_env("PARAKEET_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    if log_dir.is_empty() {
+        let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+        return;
+    }
+    // The server owns its log file: a shell redirect would keep the handle locked for the
+    // engine process it starts, and the next start could not reopen it.
+    if std::fs::create_dir_all(log_dir).is_err() {
+        let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+        return;
+    }
+    let appender = tracing_appender::rolling::daily(log_dir, "server.log");
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+    Box::leak(Box::new(guard));
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_ansi(false)
+        .with_writer(writer)
+        .try_init();
 }

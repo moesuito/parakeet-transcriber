@@ -74,7 +74,14 @@ impl Engine {
                     cmd.creation_flags(CREATE_NO_WINDOW);
                 }
                 tracing::info!(exe = %self.cfg.exe, port = self.cfg.port, "starting the transcription engine");
-                let child = cmd.spawn().with_context(|| format!("starting {}", self.cfg.exe))?;
+                // The engine writes its own stderr; detaching it keeps it from holding a
+                // handle on the server's log file (which would block the next start).
+                let child = cmd
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .with_context(|| format!("starting {}", self.cfg.exe))?;
                 *slot = Some(child);
             }
         }

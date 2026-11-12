@@ -19,6 +19,8 @@ pub struct JobRequest {
     pub name: String,
     pub language: Option<String>,
     pub diarize: bool,
+    /// Keep the file on disk after the job (the audio archive owns it).
+    pub archive: bool,
     /// Cache slot for the raw result, so corrections can change later.
     pub cache_key: String,
 }
@@ -88,7 +90,16 @@ impl Worker {
                 let _ = self.store.job_failed(&id, &message);
             }
             let _ = job.reply.send(result);
-            let _ = tokio::fs::remove_file(&job.request.source).await;
+            if !job.request.archive {
+                let _ = tokio::fs::remove_file(&job.request.source).await;
+            }
+            if self.cfg.audio_keep > 0 {
+                let dir = std::path::PathBuf::from(&self.cfg.audio_dir);
+                let removed = crate::storage::trim(&dir, self.cfg.audio_keep);
+                if removed > 0 {
+                    tracing::info!(removed, keep = self.cfg.audio_keep, "trimmed the audio archive");
+                }
+            }
         }
     }
 
@@ -168,13 +179,20 @@ impl Worker {
 }
 
 /// Registers a queued job so `GET /jobs` lists it even before it runs.
-pub fn record_queued(store: &Store, id: &str, source: &str, params: &serde_json::Value) -> Result<()> {
+pub fn record_queued(
+    store: &Store,
+    id: &str,
+    source: &str,
+    params: &serde_json::Value,
+    audio_path: Option<String>,
+) -> Result<()> {
     store.job_create(&JobRecord {
         id: id.to_string(),
         status: "queued".into(),
         created_at: now(),
         source: Some(source.to_string()),
         params: Some(params.to_string()),
+        audio_path,
         ..Default::default()
     })
 }

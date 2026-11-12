@@ -19,7 +19,8 @@ No cloud, no API keys, no account. One model file, one binary folder, done.
 ## Server mode (recommended)
 
 There is a small always-on server, `parakeet-server-rs` (Rust, in [`server/`](server/README.md)).
-It keeps the C++/Vulkan model warm and exposes one local HTTP API for everything:
+It is **headless and runs 24/7 on the machine**: started at logon by a scheduled task, no
+window, no interaction, and every tool that needs speech-to-text points at the same address.
 
 ```bash
 curl -F file=@talk.mp3 http://127.0.0.1:8800/v1/audio/transcriptions   # plain text
@@ -29,8 +30,11 @@ curl -F file=@talk.mp3 http://127.0.0.1:8800/v1/audio/transcriptions   # plain t
   or subtitles.
 - OpenAI-compatible (`/v1/models`, `/v1/audio/transcriptions`), so chat clients, dictation tools
   and Telegram bridges can all point at the same address.
-- One queue for the single GPU, a transcript cache, and a correction-rule database applied to
-  every result.
+- One queue for the single GPU, a transcript cache, and a correction database applied to every
+  result — including the community lexicons from
+  [Caffa/parakeet-corrections](https://github.com/Caffa/parakeet-corrections).
+- Transcripts are stored forever in SQLite; the original audio is a ring buffer of the newest
+  20 files, so the disk never fills.
 - Diarization is **opt-in** (`?diarize=on`) for editing work; plain transcription never pays for it.
 
 The skill uses the server when it is running and falls back to the CLI otherwise. Set it once:

@@ -14,6 +14,8 @@ pub struct Rule {
     pub case_sensitive: bool,
     pub created_at: String,
     pub hits: i64,
+    /// `user` for rules added by hand, `community` for an imported lexicon.
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -29,6 +31,7 @@ pub struct JobRecord {
     pub result: Option<String>,
     pub error: Option<String>,
     pub duration_ms: Option<i64>,
+    pub audio_path: Option<String>,
 }
 
 pub struct Store {
@@ -53,7 +56,12 @@ impl Store {
                 at_end REAL,
                 case_sensitive INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                hits INTEGER NOT NULL DEFAULT 0
+                hits INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'user'
+            );
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY,
@@ -77,6 +85,9 @@ impl Store {
             );
             "#,
         )?;
+        // Older databases gain the audio column in place.
+        let _ = conn.execute("ALTER TABLE jobs ADD COLUMN audio_path TEXT", []);
+        let _ = conn.execute("ALTER TABLE corrections ADD COLUMN source TEXT NOT NULL DEFAULT 'user'", []);
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -85,7 +96,7 @@ impl Store {
     pub fn rules(&self) -> Result<Vec<Rule>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, from_text, to_text, at_start, at_end, case_sensitive, created_at, hits
+            "SELECT id, from_text, to_text, at_start, at_end, case_sensitive, created_at, hits, source
              FROM corrections ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -102,6 +113,7 @@ impl Store {
                 case_sensitive: r.get::<_, i64>(5)? != 0,
                 created_at: r.get(6)?,
                 hits: r.get(7)?,
+                source: r.get(8)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -111,8 +123,8 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO corrections
-             (id, from_text, to_text, at_start, at_end, case_sensitive, created_at, hits)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, from_text, to_text, at_start, at_end, case_sensitive, created_at, hits, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 rule.id,
                 rule.from,
@@ -121,8 +133,53 @@ impl Store {
                 rule.at.map(|a| a.1),
                 rule.case_sensitive as i64,
                 rule.created_at,
-                rule.hits
+                rule.hits,
+                rule.source
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Replaces the whole community block in one transaction; user rules stay untouched.
+    pub fn replace_community(&self, rules: &[Rule]) -> Result<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM corrections WHERE source = 'community'", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO corrections
+                 (id, from_text, to_text, at_start, at_end, case_sensitive, created_at, hits, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'community')",
+            )?;
+            for rule in rules {
+                stmt.execute(params![
+                    rule.id,
+                    rule.from,
+                    rule.to,
+                    Option::<f64>::None,
+                    Option::<f64>::None,
+                    rule.case_sensitive as i64,
+                    rule.created_at,
+                    rule.hits
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(rules.len())
+    }
+
+    pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
         )?;
         Ok(())
     }
@@ -170,8 +227,8 @@ impl Store {
     pub fn job_create(&self, job: &JobRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO jobs (id, status, created_at, source, params) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![job.id, job.status, job.created_at, job.source, job.params],
+            "INSERT INTO jobs (id, status, created_at, source, params, audio_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![job.id, job.status, job.created_at, job.source, job.params, job.audio_path],
         )?;
         Ok(())
     }
@@ -207,7 +264,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT id, status, created_at, started_at, finished_at, source, params, text, result, error, duration_ms
+                "SELECT id, status, created_at, started_at, finished_at, source, params, text, result, error, duration_ms, audio_path
                  FROM jobs WHERE id = ?1",
                 params![id],
                 map_job,
@@ -219,7 +276,7 @@ impl Store {
     pub fn job_list(&self, limit: i64) -> Result<Vec<JobRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, status, created_at, started_at, finished_at, source, params, text, result, error, duration_ms
+            "SELECT id, status, created_at, started_at, finished_at, source, params, text, result, error, duration_ms, audio_path
              FROM jobs ORDER BY created_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], map_job)?;
@@ -259,5 +316,6 @@ fn map_job(r: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
         result: r.get(8)?,
         error: r.get(9)?,
         duration_ms: r.get(10)?,
+        audio_path: r.get(11)?,
     })
 }
