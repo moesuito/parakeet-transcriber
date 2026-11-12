@@ -37,12 +37,16 @@ curl -F file=@talk.mp3 http://127.0.0.1:8800/v1/audio/transcriptions   # plain t
   20 files, so the disk never fills.
 - Diarization is **opt-in** (`?diarize=on`) for editing work; plain transcription never pays for it.
 
-The skill uses the server when it is running and falls back to the CLI otherwise. Set it once:
+The skill **always** goes through the server — there is no local fallback. Point it once:
 
 ```json
 // scripts/config.json
 { "defaults": { "server": "http://127.0.0.1:8800" } }
 ```
+
+If the server is down, the skill stops with a clear error instead of loading the model itself;
+start the scheduled task and run again. The CLI flags (`--cli`, `--model`, `--diar-model`) are
+still accepted but ignored.
 
 See [`server/README.md`](server/README.md) for endpoints, configuration and the 24/7 setup.
 

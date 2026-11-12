@@ -19,13 +19,14 @@ diarization** (Sortformer), three output formats, and a hash-based cache.
 
 ## Health check
 
-- Preferred: the local server answers `GET http://127.0.0.1:8800/health`
-  (`parakeet-server-rs`, port from `defaults.server` in `config.json`). When it is up,
-  the script uses it and never loads the model itself.
-- Fallback runtime: `<HOME>/bin/parakeet-cli(.exe)` + `diarize(.exe)` (`<HOME>` = `~/.parakeet-transcriber`,
-  or `PARAKEET_TRANSCRIBER_HOME`, or paths in a local `config.json` next to the script).
-- Models: `<HOME>/models/tdt-0.6b-v3-f16.gguf` (required),
-  `<HOME>/models/nemotron-3-diarization-f16.gguf` (optional, for `--diarize on`).
+- **Required:** the local server answers `GET http://127.0.0.1:8800/health`
+  (`parakeet-server-rs`, port from `defaults.server` in `config.json`). The skill has **no local
+  fallback**: it passes the audio to the server, which owns the model, the queue and the
+  corrections. If the server is down the run stops with a clear message — start the scheduled
+  task `parakeet-server` and run again.
+- Models live on the server (`C:\AI\STT`), not in `<HOME>`; `--cli`, `--model` and `--diar-model`
+  are accepted for older callers and ignored.
+- `<HOME>/models/nemotron-3-diarization-f16.gguf` is loaded by the server for `--diarize on`.
 - If something is missing, read the repository **README.md** — it contains the full setup.
 - A healthy run logs a `[parakeet] using device: Vulkan0`-style line. CPU fallback:
   `PARAKEET_DEVICE=Vulkan0` (or force `cpu` only for debugging).
@@ -38,7 +39,7 @@ python <skill>/scripts/transcribe.py <media> [options]
 
 | Option | Default | Description |
 |---|---|---|
-| `--server URL` | `defaults.server` in `config.json` | use the local server (no per-file model load) |
+| `--server URL` | `http://127.0.0.1:8800` | the transcription server (config `defaults.server`, env `PARAKEET_SERVER`) |
 | `--out DIR` | `<media_parent>/transcripts` | output directory |
 | `--quant f16\|q8_0` | f16 | model precision (f16 = maximum accuracy) |
 | `--diarize auto\|on\|off` | off | speaker attribution — **opt-in**, ask for `on` when you need speakers |

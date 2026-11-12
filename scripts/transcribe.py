@@ -606,7 +606,7 @@ def write_review(scribe: dict, path: Path, threshold: float) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _retranscribe(cfg: dict, home: Path, cli: Path, asr_model: Path, src: Path, args) -> int:
+def _retranscribe(server: str, src: Path, args) -> int:
     """Fresh-context transcription of one span (agent repair workflow)."""
     spec = args.retranscribe
     try:
@@ -634,11 +634,13 @@ def _retranscribe(cfg: dict, home: Path, cli: Path, asr_model: Path, src: Path, 
                  "-c:a", "pcm_s16le", str(cut)])
         if p.returncode != 0:
             raise SystemExit(f"ffmpeg cut failed: {p.stderr.strip()[:300]}")
-        parsed, _stderr, dt = run_asr(cli, asr_model, cut, args.lang)
+        t0 = time.time()
+        payload = transcribe_via_server(server, cut, args.lang, diarize=False)
+        dt = time.time() - t0
 
     words = []
-    for w in parsed.get("words", []):
-        txt = (w.get("w") or "").strip()
+    for w in payload.get("words", []):
+        txt = str(w.get("word") or w.get("text") or "").strip()
         if not txt:
             continue
         words.append({"text": txt, "start": round(float(w["start"]) + s, 3),
@@ -742,6 +744,30 @@ def _apply_corrections(src: Path, args) -> int:
 
 # ---------------------------------------------------------------- main
 
+DEFAULT_SERVER = "http://127.0.0.1:8800"
+
+
+def server_root(base: str) -> str:
+    root = base.rstrip("/")
+    return root[: -len("/v1")] if root.endswith("/v1") else root
+
+
+def server_health(base: str) -> dict:
+    """Fails fast when the server is down: this skill has no local fallback."""
+    import urllib.request
+
+    root = server_root(base)
+    try:
+        with urllib.request.urlopen(f"{root}/health", timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except OSError as err:
+        raise SystemExit(
+            f"parakeet server unavailable at {root}: {err}\n"
+            "  Start it with the scheduled task 'parakeet-server' (or check defaults.server).\n"
+            "  The skill only transcribes through the server; there is no local fallback."
+        )
+
+
 def _speaker_index(value):
     """`speaker_2` (server/scene) -> 2, so the skill JSON keeps one numbering."""
     if value is None:
@@ -817,9 +843,9 @@ def main() -> int:
     ap.add_argument("--formats", default=None,
                     help="comma list of json,srt,txt,vtt (default: json,srt,txt)")
     ap.add_argument("--server", default=None, metavar="URL",
-                    help="use the local parakeet server instead of the CLI, e.g. "
-                         "http://127.0.0.1:8800 (also config defaults.server / PARAKEET_SERVER)")
-    ap.add_argument("--cli", default=None, help="parakeet-cli path override")
+                    help=f"transcription server (default {DEFAULT_SERVER}; also defaults.server / "
+                         "PARAKEET_SERVER). The skill only works through the server")
+    ap.add_argument("--cli", default=None, help="ignored (kept for older callers): the skill uses the server")
     ap.add_argument("--model", default=None, help="ASR model (.gguf) path override")
     ap.add_argument("--diar-model", default=None, help="diarization model path override")
     ap.add_argument("--force", action="store_true", help="ignore cache")
@@ -848,38 +874,22 @@ def main() -> int:
         raise SystemExit(f"file not found: {src}")
 
     server = args.server if args.server is not None else (defaults.get("server") or os.environ.get("PARAKEET_SERVER"))
-    server = (server or "").strip() or None
+    server = (server or DEFAULT_SERVER).strip().rstrip("/")
+    server_health(server)
 
     home = resolve_home(cfg)
-    if server:
-        # The server owns the runtime and the model; the CLI is not used at all.
-        cli = Path("parakeet-server-rs")
-        asr_model = Path(str((cfg.get("models") or {}).get(quant) or f"parakeet-ultra ({quant})"))
-    else:
-        cli = resolve_cli(cfg, home, args.cli)
-        asr_model = resolve_model(cfg, home, quant, args.model)
+    # The server owns the runtime and the model; this skill never loads them itself.
+    cli = Path("parakeet-server-rs")
+    asr_model = Path(str((cfg.get("models") or {}).get(quant) or f"parakeet-ultra ({quant})"))
 
     if args.retranscribe:
-        return _retranscribe(cfg, home, cli, asr_model, src, args)
+        return _retranscribe(server, src, args)
     if args.apply_corrections:
         return _apply_corrections(src, args)
-    if server:
-        diar_model = None
-        diarize_exe = None
-        # Diarization is opt-in: only an explicit --diarize on requests it.
-        can_diar = diarize_arg == "on"
-    else:
-        diar_model = resolve_diar_model(cfg, home, args.diar_model)
-        diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or diarize_arg == "on") else None
-        want_diar = diarize_arg != "off"
-        can_diar = want_diar and diar_model is not None and diarize_exe is not None
-        if diarize_arg == "on" and not can_diar:
-            raise SystemExit(
-                "diarization requested but unavailable:\n"
-                f"  diarize binary: {diarize_exe or 'not found'}\n"
-                f"  diarization model: {diar_model or 'not found'}\n"
-                "  See README (Optional: speaker diarization)."
-            )
+    # The server owns diarization: it runs `parakeet-cli scene` behind /transcribe.
+    diar_model = None
+    diarize_exe = None
+    can_diar = diarize_arg == "on"
 
     out_dir = (args.out or (src.parent / "transcripts")).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -935,67 +945,30 @@ def main() -> int:
         device = ""
         diar_mode = None
         segs = None
-        norm_words = None
         raw_tokens: list = []
-        asr_dt = 0.0
 
-        if server:
-            t0 = time.time()
-            payload = transcribe_via_server(server, wav, lang, diarize=can_diar)
-            asr_dt = time.time() - t0
-            norm_words = [
-                {
-                    "text": str(w.get("word") or w.get("text") or "").strip(),
-                    "start": float(w.get("start", 0.0)),
-                    "end": float(w.get("end", 0.0)),
-                    "conf": w.get("conf"),
-                    "speaker": _speaker_index(w.get("speaker")),
-                }
-                for w in (payload.get("words") or [])
-                if str(w.get("word") or w.get("text") or "").strip()
-            ]
-            if not norm_words:
-                raise SystemExit("the server returned no words for this file")
-            diar_mode = "server" if can_diar else None
-            if not args.quiet:
-                speakers = {w["speaker"] for w in norm_words if w.get("speaker") is not None}
-                log(f"server: {server}  {asr_dt:.1f}s for {duration:.1f}s "
-                    f"({duration / max(asr_dt, 1e-6):.1f}x), {len(norm_words)} words"
-                    + (f", {len(speakers)} speaker(s)" if speakers else ""))
-
-        if norm_words is None and can_diar and not args.tokens:
-            # scene mode does not export token-level data; --tokens uses ASR + post diarization
-            t0 = time.time()
-            scene_words, scene_err = run_scene(cli, asr_model, diar_model, wav)
-            scene_dt = time.time() - t0
-            if scene_words:
-                norm_words = scene_words
-                diar_mode = "scene"
-                asr_dt = scene_dt
-                device = device_line(scene_err)
-                if not args.quiet:
-                    spk = sorted({w["speaker"] for w in norm_words if w.get("speaker") is not None})
-                    log(f"scene (ASR + diarization): {scene_dt:.1f}s for {duration:.1f}s "
-                        f"({duration / max(scene_dt, 1e-6):.1f}x), {len(norm_words)} words, "
-                        f"{len(spk)} speaker(s)  {device}")
-
-        if norm_words is None:
-            parsed, stderr, asr_dt = run_asr(cli, asr_model, wav, lang)
-            device = device_line(stderr)
-            if not args.quiet:
-                log(f"ASR: {asr_dt:.1f}s for {duration:.1f}s "
-                    f"({duration / max(asr_dt, 1e-6):.1f}x)  {device}")
-            norm_words = normalize_asr_words(parsed)
-            raw_tokens = parsed.get("tokens") or []
-            if can_diar:
-                t0 = time.time()
-                segs = run_diarization(diarize_exe, diar_model, wav)
-                if segs:
-                    diar_mode = "post"
-                    spk = sorted({s["speaker"] for s in segs})
-                    if not args.quiet:
-                        log(f"diarization (post): {time.time() - t0:.1f}s, {len(segs)} turns, "
-                            f"{len(spk)} speaker(s)")
+        t0 = time.time()
+        payload = transcribe_via_server(server, wav, lang, diarize=can_diar)
+        asr_dt = time.time() - t0
+        norm_words = [
+            {
+                "text": str(w.get("word") or w.get("text") or "").strip(),
+                "start": float(w.get("start", 0.0)),
+                "end": float(w.get("end", 0.0)),
+                "conf": w.get("conf"),
+                "speaker": _speaker_index(w.get("speaker")),
+            }
+            for w in (payload.get("words") or [])
+            if str(w.get("word") or w.get("text") or "").strip()
+        ]
+        if not norm_words:
+            raise SystemExit("the server returned no words for this file")
+        diar_mode = "server" if can_diar else None
+        if not args.quiet:
+            speakers = {w["speaker"] for w in norm_words if w.get("speaker") is not None}
+            log(f"server: {server}  {asr_dt:.1f}s for {duration:.1f}s "
+                f"({duration / max(asr_dt, 1e-6):.1f}x), {len(norm_words)} words"
+                + (f", {len(speakers)} speaker(s)" if speakers else ""))
 
     scribe = words_to_scribe(norm_words, segs)
 
@@ -1030,21 +1003,8 @@ def main() -> int:
                 rich["words"] = scribe["words"]
             else:
                 carry_corrections_into_json(rich, scribe["words"], render_words, corr_path.name)
-        if args.tokens and server:
-            log("warning: --tokens needs the local CLI; ignored when using --server")
-        if args.tokens and not server:
-            vocab = load_vocab(asr_model)
-            tokens_out = []
-            for tok in raw_tokens:
-                tid = tok.get("id")
-                txt = None
-                if vocab and isinstance(tid, int) and 0 <= tid < len(vocab):
-                    txt = clean_piece(vocab[tid])
-                tokens_out.append({"id": tid, "text": txt, "start": tok.get("t"),
-                                   "confidence": tok.get("conf")})
-            rich["tokens"] = tokens_out
-            if not vocab:
-                log("warning: tokenizer pieces not found in the GGUF; tokens carry ids only")
+        if args.tokens:
+            log("warning: --tokens needs the local CLI and is not available through the server; skipped")
         expected["json"].write_text(json.dumps(rich, ensure_ascii=False, indent=1), encoding="utf-8")
         written.append(expected["json"])
     if "srt" in formats:
