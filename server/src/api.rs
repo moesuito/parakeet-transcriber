@@ -104,7 +104,7 @@ async fn parse(mut mp: Multipart) -> Result<Parsed, ApiError> {
             }
             "response_format" | "format" => out.format = Some(field.text().await.unwrap_or_default()),
             "language" => out.language = Some(field.text().await.unwrap_or_default()),
-            "diarize" => out.diarize = Some(field.text().await.unwrap_or_default()),
+            "diarize" | "diarization" | "speakers" => out.diarize = Some(field.text().await.unwrap_or_default()),
             "timestamp_granularities[]" | "timestamp_granularities" => {
                 let value = field.text().await.unwrap_or_default();
                 if value.contains("word") {

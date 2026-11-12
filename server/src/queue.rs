@@ -109,6 +109,7 @@ impl Worker {
 
         let work = async {
             let wav = self.to_wav(&job.source).await?;
+            let mut fell_back = false;
             let mut transcript = if job.diarize {
                 let scene = self
                     .engine
@@ -116,6 +117,7 @@ impl Worker {
                     .await?;
                 if scene.words.is_empty() {
                     tracing::warn!(job = %job.id, "diarization returned no words; using the warm engine");
+                    fell_back = true;
                     self.engine.transcribe(&wav, job.language.as_deref()).await?
                 } else {
                     scene
@@ -126,8 +128,12 @@ impl Worker {
             let _ = tokio::fs::remove_file(&wav).await;
 
             // The cache holds the raw result: rules can change later without a re-run.
-            if let Ok(payload) = serde_json::to_string(&transcript.payload()) {
-                let _ = self.store.cache_put(&job.cache_key, &payload);
+            // A diarization that fell back to the warm engine is not diarized, so it must
+            // not be stored under the diarized key.
+            if !fell_back {
+                if let Ok(payload) = serde_json::to_string(&transcript.payload()) {
+                    let _ = self.store.cache_put(&job.cache_key, &payload);
+                }
             }
 
             // Corrections are part of every result, whichever format is asked for.

@@ -44,7 +44,7 @@ milliseconds, and stays up for weeks.
 |---|---|---|
 | GET | `/health` | engine reachable, queue depth, model name |
 | GET | `/v1/models` | OpenAI model list (one entry) |
-| POST | `/v1/audio/transcriptions` | OpenAI-compatible; `response_format` = `text` (default), `json`, `srt`, `vtt`, `verbose_json` |
+| POST | `/v1/audio/transcriptions` | OpenAI-compatible; `response_format` = `text` (default), `json`, `srt`, `vtt`, `verbose_json`. Send `diarize=on` as a form field for speakers. |
 | POST | `/transcribe` | rich result: `?format=text\|json\|srt\|vtt\|all`, `?diarize=on` |
 | GET | `/jobs` | recent jobs with status, duration and text |
 | GET | `/jobs/{id}` | one job |
@@ -72,6 +72,20 @@ curl -F file=@talk.mp3 -F response_format=srt http://127.0.0.1:8800/v1/audio/tra
 # speaker labels (editing work only)
 curl -F file=@interview.mp4 "http://127.0.0.1:8800/transcribe?format=json&diarize=on"
 ```
+
+When diarization runs, `verbose_json` carries the speakers everywhere:
+
+```json
+{
+  "speakers": ["speaker_0", "speaker_1"],
+  "words":    [{ "word": "Mr", "start": 0.24, "end": 0.72, "speaker": "speaker_0" }],
+  "segments": [{ "id": 0, "start": 0.24, "end": 5.04, "text": "Mr Quilter is …", "speaker": "speaker_0" }]
+}
+```
+
+`response_format=srt` and `vtt` prefix each cue with `Speaker N:` when a cue has one voice.
+`diarize` accepts `on`/`true`/`1`; the field can be named `diarize`, `diarization` or `speakers`.
+Without it, nothing changes: plain transcription never runs the speaker pass.
 
 OpenAI Python client:
 

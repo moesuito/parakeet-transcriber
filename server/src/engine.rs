@@ -214,10 +214,7 @@ impl Engine {
                     }
                     let start = w.get("start").and_then(Value::as_f64).unwrap_or(0.0);
                     let end = w.get("end").and_then(Value::as_f64).unwrap_or(start);
-                    let speaker = w.get("speaker").map(|s| match s {
-                        Value::String(v) => v.clone(),
-                        other => other.to_string(),
-                    });
+                    let speaker = w.get("speaker").and_then(speaker_id);
                     if words.iter().any(|e| e.start == start && e.end == end && e.word == text) {
                         continue;
                     }
@@ -233,11 +230,11 @@ impl Engine {
             }
             if let Some(list) = snapshot.get("speakers").and_then(Value::as_array) {
                 for s in list {
-                    let Some(id) = s.get("speaker").and_then(Value::as_str) else { continue };
+                    let Some(id) = s.get("speaker").and_then(speaker_id) else { continue };
                     let start = s.get("start").and_then(Value::as_f64).unwrap_or(0.0);
                     let end = s.get("end").and_then(Value::as_f64).unwrap_or(start);
-                    if !speakers.iter().any(|(a, b, c)| a == &start && b == &end && c == id) {
-                        speakers.push((start, end, id.to_string()));
+                    if !speakers.iter().any(|(a, b, c)| a == &start && b == &end && c == &id) {
+                        speakers.push((start, end, id));
                     }
                 }
             }
@@ -258,5 +255,18 @@ impl Engine {
         let mut transcript = Transcript { text: String::new(), words, language: None, duration: Some(duration) };
         transcript.rebuild_text();
         Ok(transcript)
+    }
+}
+
+/// One speaker id as this API reports it: `speaker_0`, `speaker_1`, ….
+fn speaker_id(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.is_empty() => Some(if text.starts_with("speaker_") {
+            text.clone()
+        } else {
+            format!("speaker_{text}")
+        }),
+        Value::Number(number) => Some(format!("speaker_{number}")),
+        _ => None,
     }
 }
