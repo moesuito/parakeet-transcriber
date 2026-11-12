@@ -16,6 +16,34 @@ No cloud, no API keys, no account. One model file, one binary folder, done.
 
 ---
 
+## Server mode (recommended)
+
+There is a small always-on server, `parakeet-server-rs` (Rust, in [`server/`](server/README.md)).
+It keeps the C++/Vulkan model warm and exposes one local HTTP API for everything:
+
+```bash
+curl -F file=@talk.mp3 http://127.0.0.1:8800/v1/audio/transcriptions   # plain text
+```
+
+- Plain text by default; `response_format=json|verbose_json|srt|vtt` when you need timestamps
+  or subtitles.
+- OpenAI-compatible (`/v1/models`, `/v1/audio/transcriptions`), so chat clients, dictation tools
+  and Telegram bridges can all point at the same address.
+- One queue for the single GPU, a transcript cache, and a correction-rule database applied to
+  every result.
+- Diarization is **opt-in** (`?diarize=on`) for editing work; plain transcription never pays for it.
+
+The skill uses the server when it is running and falls back to the CLI otherwise. Set it once:
+
+```json
+// scripts/config.json
+{ "defaults": { "server": "http://127.0.0.1:8800" } }
+```
+
+See [`server/README.md`](server/README.md) for endpoints, configuration and the 24/7 setup.
+
+---
+
 ## Quick install (one line)
 
 ```powershell

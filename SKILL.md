@@ -19,10 +19,13 @@ diarization** (Sortformer), three output formats, and a hash-based cache.
 
 ## Health check
 
-- Runtime: `<HOME>/bin/parakeet-cli(.exe)` + `diarize(.exe)` (`<HOME>` = `~/.parakeet-transcriber`,
+- Preferred: the local server answers `GET http://127.0.0.1:8800/health`
+  (`parakeet-server-rs`, port from `defaults.server` in `config.json`). When it is up,
+  the script uses it and never loads the model itself.
+- Fallback runtime: `<HOME>/bin/parakeet-cli(.exe)` + `diarize(.exe)` (`<HOME>` = `~/.parakeet-transcriber`,
   or `PARAKEET_TRANSCRIBER_HOME`, or paths in a local `config.json` next to the script).
 - Models: `<HOME>/models/tdt-0.6b-v3-f16.gguf` (required),
-  `<HOME>/models/nemotron-3-diarization-f16.gguf` (optional, for `--diarize`).
+  `<HOME>/models/nemotron-3-diarization-f16.gguf` (optional, for `--diarize on`).
 - If something is missing, read the repository **README.md** — it contains the full setup.
 - A healthy run logs a `[parakeet] using device: Vulkan0`-style line. CPU fallback:
   `PARAKEET_DEVICE=Vulkan0` (or force `cpu` only for debugging).
@@ -35,22 +38,29 @@ python <skill>/scripts/transcribe.py <media> [options]
 
 | Option | Default | Description |
 |---|---|---|
+| `--server URL` | `defaults.server` in `config.json` | use the local server (no per-file model load) |
 | `--out DIR` | `<media_parent>/transcripts` | output directory |
 | `--quant f16\|q8_0` | f16 | model precision (f16 = maximum accuracy) |
-| `--diarize auto\|on\|off` | auto | speaker attribution (on when the model is installed) |
+| `--diarize auto\|on\|off` | off | speaker attribution — **opt-in**, ask for `on` when you need speakers |
 | `--audio-track N` | auto (most channels) | which audio stream to use |
 | `--formats json,srt,txt[,vtt]` | json,srt,txt | artifacts to write |
 | `--lang pt` | — | forwarded to the runtime; ignored by the v3 model (detection is built-in) |
 | `--force` | — | ignore the cache |
 
+Plain transcription (chat, notes, voice messages) never diarizes: leave `--diarize` out.
+Use `--diarize on` only for editing work (interviews, podcasts), where "who said what" matters.
+
 Examples:
 
 ```bash
-# interview with 2+ speakers -> all three formats
+# default: text, SRT and JSON through the local server, no diarization
 python <skill>/scripts/transcribe.py "C:\videos\interview.mp4"
 
-# subtitles only, fastest quant
-python <skill>/scripts/transcribe.py "C:\videos\podcast.mkv" --quant q8_0 --formats srt
+# editing: label the speakers
+python <skill>/scripts/transcribe.py "C:\videos\interview.mp4" --diarize on
+
+# subtitles only
+python <skill>/scripts/transcribe.py "C:\videos\podcast.mkv" --formats srt
 
 # drop into a video-use project (JSON only)
 python <skill>/scripts/transcribe.py "C:\videos\C0103.MP4" --out "C:\videos\edit\transcripts" --formats json

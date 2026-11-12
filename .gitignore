@@ -1,4 +1,6 @@
 config.json
+config.example.json
 __pycache__/
 *.pyc
 .venv/
+server/target/

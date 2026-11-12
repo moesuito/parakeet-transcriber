@@ -742,6 +742,52 @@ def _apply_corrections(src: Path, args) -> int:
 
 # ---------------------------------------------------------------- main
 
+def _speaker_index(value):
+    """`speaker_2` (server/scene) -> 2, so the skill JSON keeps one numbering."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value)
+    if text.startswith("speaker_"):
+        text = text[len("speaker_"):]
+    return int(text) if text.isdigit() else text
+
+
+def transcribe_via_server(base: str, wav: Path, lang: str | None, diarize: bool) -> dict:
+    """Sends the WAV to the local parakeet server and returns its JSON transcript.
+
+    The server keeps the model loaded, so this path skips the per-file model load.
+    """
+    import urllib.parse
+    import urllib.request
+    import uuid
+
+    root = base.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    query = f"format=json&diarize={'on' if diarize else 'off'}"
+    if lang:
+        query += f"&lang={urllib.parse.quote(lang)}"
+    url = f"{root}/transcribe?{query}"
+
+    boundary = "----parakeet" + uuid.uuid4().hex
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{wav.name}"\r\n'
+        "Content-Type: audio/wav\r\n\r\n"
+    ).encode()
+    body = b"".join([head, wav.read_bytes(), f"\r\n--{boundary}--\r\n".encode()])
+
+    request = urllib.request.Request(url, data=body, method="POST")
+    request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    try:
+        with urllib.request.urlopen(request, timeout=900) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except OSError as err:
+        raise SystemExit(f"parakeet server unreachable at {root}: {err}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Local speech-to-text with word timestamps (Parakeet TDT 0.6B v3, Vulkan)")
@@ -770,6 +816,9 @@ def main() -> int:
                     help="zero-based audio track index (default: most channels)")
     ap.add_argument("--formats", default=None,
                     help="comma list of json,srt,txt,vtt (default: json,srt,txt)")
+    ap.add_argument("--server", default=None, metavar="URL",
+                    help="use the local parakeet server instead of the CLI, e.g. "
+                         "http://127.0.0.1:8800 (also config defaults.server / PARAKEET_SERVER)")
     ap.add_argument("--cli", default=None, help="parakeet-cli path override")
     ap.add_argument("--model", default=None, help="ASR model (.gguf) path override")
     ap.add_argument("--diar-model", default=None, help="diarization model path override")
@@ -798,25 +847,39 @@ def main() -> int:
     if not src.exists():
         raise SystemExit(f"file not found: {src}")
 
+    server = args.server if args.server is not None else (defaults.get("server") or os.environ.get("PARAKEET_SERVER"))
+    server = (server or "").strip() or None
+
     home = resolve_home(cfg)
-    cli = resolve_cli(cfg, home, args.cli)
-    asr_model = resolve_model(cfg, home, quant, args.model)
+    if server:
+        # The server owns the runtime and the model; the CLI is not used at all.
+        cli = Path("parakeet-server-rs")
+        asr_model = Path(str((cfg.get("models") or {}).get(quant) or f"parakeet-ultra ({quant})"))
+    else:
+        cli = resolve_cli(cfg, home, args.cli)
+        asr_model = resolve_model(cfg, home, quant, args.model)
 
     if args.retranscribe:
         return _retranscribe(cfg, home, cli, asr_model, src, args)
     if args.apply_corrections:
         return _apply_corrections(src, args)
-    diar_model = resolve_diar_model(cfg, home, args.diar_model)
-    diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or diarize_arg == "on") else None
-    want_diar = diarize_arg != "off"
-    can_diar = want_diar and diar_model is not None and diarize_exe is not None
-    if diarize_arg == "on" and not can_diar:
-        raise SystemExit(
-            "diarization requested but unavailable:\n"
-            f"  diarize binary: {diarize_exe or 'not found'}\n"
-            f"  diarization model: {diar_model or 'not found'}\n"
-            "  See README (Optional: speaker diarization)."
-        )
+    if server:
+        diar_model = None
+        diarize_exe = None
+        # Diarization is opt-in: only an explicit --diarize on requests it.
+        can_diar = diarize_arg == "on"
+    else:
+        diar_model = resolve_diar_model(cfg, home, args.diar_model)
+        diarize_exe = resolve_diarize(cfg, home, cli, None) if (diar_model or diarize_arg == "on") else None
+        want_diar = diarize_arg != "off"
+        can_diar = want_diar and diar_model is not None and diarize_exe is not None
+        if diarize_arg == "on" and not can_diar:
+            raise SystemExit(
+                "diarization requested but unavailable:\n"
+                f"  diarize binary: {diarize_exe or 'not found'}\n"
+                f"  diarization model: {diar_model or 'not found'}\n"
+                "  See README (Optional: speaker diarization)."
+            )
 
     out_dir = (args.out or (src.parent / "transcripts")).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -876,7 +939,31 @@ def main() -> int:
         raw_tokens: list = []
         asr_dt = 0.0
 
-        if can_diar and not args.tokens:
+        if server:
+            t0 = time.time()
+            payload = transcribe_via_server(server, wav, lang, diarize=can_diar)
+            asr_dt = time.time() - t0
+            norm_words = [
+                {
+                    "text": str(w.get("word") or w.get("text") or "").strip(),
+                    "start": float(w.get("start", 0.0)),
+                    "end": float(w.get("end", 0.0)),
+                    "conf": w.get("conf"),
+                    "speaker": _speaker_index(w.get("speaker")),
+                }
+                for w in (payload.get("words") or [])
+                if str(w.get("word") or w.get("text") or "").strip()
+            ]
+            if not norm_words:
+                raise SystemExit("the server returned no words for this file")
+            diar_mode = "server" if can_diar else None
+            if not args.quiet:
+                speakers = {w["speaker"] for w in norm_words if w.get("speaker") is not None}
+                log(f"server: {server}  {asr_dt:.1f}s for {duration:.1f}s "
+                    f"({duration / max(asr_dt, 1e-6):.1f}x), {len(norm_words)} words"
+                    + (f", {len(speakers)} speaker(s)" if speakers else ""))
+
+        if norm_words is None and can_diar and not args.tokens:
             # scene mode does not export token-level data; --tokens uses ASR + post diarization
             t0 = time.time()
             scene_words, scene_err = run_scene(cli, asr_model, diar_model, wav)
@@ -943,7 +1030,9 @@ def main() -> int:
                 rich["words"] = scribe["words"]
             else:
                 carry_corrections_into_json(rich, scribe["words"], render_words, corr_path.name)
-        if args.tokens:
+        if args.tokens and server:
+            log("warning: --tokens needs the local CLI; ignored when using --server")
+        if args.tokens and not server:
             vocab = load_vocab(asr_model)
             tokens_out = []
             for tok in raw_tokens:
@@ -981,8 +1070,9 @@ def main() -> int:
         "lang": lang,
         "diarized": diar_mode is not None,
         "diar_mode": diar_mode,
-        "diar_model": diar_model.name if diar_mode else None,
+        "diar_model": diar_model.name if (diar_mode and diar_model) else None,
         "cli": str(cli),
+        "server": server,
         "asr_seconds": round(asr_dt, 2),
         "rtf": round(duration / max(asr_dt, 1e-6), 2),
         "words": len([w for w in scribe["words"] if w["type"] == "word"]),
