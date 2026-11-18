@@ -26,6 +26,10 @@ window, no interaction, and every tool that needs speech-to-text points at the s
 curl -F file=@talk.mp3 http://127.0.0.1:8800/v1/audio/transcriptions   # plain text
 ```
 
+It binds `0.0.0.0:8800` by default, so other devices on your LAN or Tailscale can use the
+machine's address instead of `127.0.0.1`. There is no authentication — the network is the
+boundary, so set `bind` back to `127.0.0.1:8800` when that is not what you want.
+
 - Plain text by default; `response_format=json|verbose_json|srt|vtt` when you need timestamps
   or subtitles.
 - OpenAI-compatible (`/v1/models`, `/v1/audio/transcriptions`), so chat clients, dictation tools

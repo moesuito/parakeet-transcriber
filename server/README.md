@@ -156,7 +156,7 @@ all; transcripts are unaffected either way. Each job reports its file as `audio`
 
 ```json
 {
-  "bind": "127.0.0.1:8800",
+  "bind": "0.0.0.0:8800",
   "model_id": "parakeet-ultra",
   "engine": {
     "exe": "C:\\AI\\STT\\bin\\master\\parakeet-server.exe",
@@ -179,6 +179,10 @@ all; transcripts are unaffected either way. Each job reports its file as `audio`
   "log_dir": "C:\\AI\\stt\\logs"
 }
 ```
+
+`bind` defaults to `0.0.0.0:8800`, so the API answers on **every interface** — loopback, LAN and
+Tailscale. Set it to `127.0.0.1:8800` to keep it reachable only from this machine. The server has
+no authentication, so the network is the boundary: only expose it on networks you trust.
 
 `retention_days` (0 = keep forever) only trims finished jobs; transcripts are the point of the
 server, so the default keeps them. `audio_keep` caps the audio archive, not the transcripts.

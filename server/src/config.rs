@@ -8,7 +8,7 @@ pub const DEFAULT_CONFIG_PATH: &str = r"C:\AI\stt\config\server.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Address the HTTP server binds to. Local only by default.
+    /// Address the HTTP server binds to. Every interface by default (LAN + Tailscale).
     #[serde(default = "default_bind")]
     pub bind: String,
     /// Id reported by `GET /v1/models` and accepted in requests.
@@ -84,7 +84,7 @@ pub struct QueueConfig {
 }
 
 fn default_bind() -> String {
-    "127.0.0.1:8800".into()
+    "0.0.0.0:8800".into()
 }
 fn default_model_id() -> String {
     "parakeet-ultra".into()
