@@ -14,7 +14,7 @@ diarization** (Sortformer), three output formats, and a hash-based cache.
 
 - Transcribe any audio/video (mp4, mkv, mov, wav, mp3, ogg...) with **word-level timestamps**.
 - Subtitles (**SRT**) or reading transcripts (**TXT**).
-- Know **who said what** (up to 8 speakers) via `--diarize`.
+- Know **who said what** (up to 8 speakers) via `--diarize on`.
 - Feed editing workflows: the JSON is compatible with video-use's transcript expectations.
 
 ## Health check
@@ -28,8 +28,6 @@ diarization** (Sortformer), three output formats, and a hash-based cache.
   are accepted for older callers and ignored.
 - `<HOME>/models/nemotron-3-diarization-f16.gguf` is loaded by the server for `--diarize on`.
 - If something is missing, read the repository **README.md** — it contains the full setup.
-- A healthy run logs a `[parakeet] using device: Vulkan0`-style line. CPU fallback:
-  `PARAKEET_DEVICE=Vulkan0` (or force `cpu` only for debugging).
 
 ## Usage
 
@@ -100,8 +98,8 @@ guidance). Review is **contextual**, not only about language drift — deliver c
      fresh-context transcription of just that span, then fix words with the rule above.
 3. Never hand-edit SRT timings or JSON words — corrections always go through
    `--apply-corrections` (`--keep-raw-json` leaves the JSON untouched).
-4. `--tokens` adds token-level timestamps and confidences (token text resolved from the model
-   vocab) to the JSON for maximum-precision inspection.
+4. `--tokens` (token ids and confidences) is a CLI-only feature: through the server it is
+   skipped with a warning and the JSON has no `tokens` array.
 
 ## Golden rules
 
