@@ -1,10 +1,14 @@
 # parakeet-transcriber
 
 **Offline, GPU-accelerated speech-to-text for AI agents and humans.**
-Runs NVIDIA **[Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)**
-(25 languages, strong Brazilian Portuguese) on **Vulkan** via
+Runs **Parakeet Ultra** (`moondream/parakeet-ultra`, a TDT transducer model; strong Brazilian
+Portuguese) on **Vulkan** via
 [parakeet.cpp](https://github.com/mudler/parakeet.cpp), with **word-level timestamps**,
 optional **speaker diarization** (Sortformer), and three output formats:
+
+> The model is whatever the server is configured with (`engine.model` in
+> `C:\AI\stt\config\server.json`); on this machine it is `parakeet-ultra.f16.gguf`.
+> The CLI installer below still downloads NVIDIA's Parakeet TDT 0.6B v3 for a fresh setup.
 
 | Format | Focus | Content |
 | --- | --- | --- |

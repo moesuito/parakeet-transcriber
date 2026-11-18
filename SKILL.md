@@ -1,14 +1,15 @@
 ---
 name: "parakeet-transcriber"
 license: "Apache-2.0"
-description: "Offline, GPU-accelerated speech-to-text with word-level timestamps and optional speaker diarization (NVIDIA Parakeet TDT 0.6B v3 on Vulkan via parakeet.cpp). Produces JSON (maximum precision), SRT (subtitles) and TXT (reading). Use whenever you need to transcribe audio/video, subtitle a file, get per-word timestamps, identify who spoke, or feed an editing workflow (video-use, HyperFrames). No cloud, no API keys. Keywords: transcribe, transcription, speech-to-text, subtitles, captions, SRT, timestamps, word-level, speaker diarization, offline."
+description: "Offline, GPU-accelerated speech-to-text with word-level timestamps and optional speaker diarization (Parakeet Ultra, a TDT model on Vulkan via parakeet.cpp). Produces JSON (maximum precision), SRT (subtitles) and TXT (reading). Use whenever you need to transcribe audio/video, subtitle a file, get per-word timestamps, identify who spoke, or feed an editing workflow (video-use, HyperFrames). No cloud, no API keys. Keywords: transcribe, transcription, speech-to-text, subtitles, captions, SRT, timestamps, word-level, speaker diarization, offline."
 ---
 
 # parakeet-transcriber
 
-Local **GPU-first (Vulkan)** transcription: **Parakeet TDT 0.6B v3** (25 languages,
-strong Brazilian Portuguese) with **word-level timestamps**, optional **speaker
-diarization** (Sortformer), three output formats, and a hash-based cache.
+Local **GPU-first (Vulkan)** transcription: **Parakeet Ultra** (`moondream/parakeet-ultra`, a
+TDT model, strong Brazilian Portuguese) with **word-level timestamps**, optional **speaker
+diarization** (Sortformer), three output formats, and a hash-based cache. The model is the one
+the server is configured with (`engine.model` in `C:\AI\stt\config\server.json`).
 
 ## When to use
 
